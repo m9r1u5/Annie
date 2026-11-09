@@ -1,0 +1,114 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # If you uploaded a .zip of the project from your phone, unpack it,
+      # save the files in the repo and delete the zip.
+      - name: Unpack uploaded zip
+        run: |
+          shopt -s nullglob
+          zips=(*.zip)
+          if [ ${#zips[@]} -eq 0 ]; then
+            if [ ! -f pubspec.yaml ]; then
+              echo "::error::No app code yet. Upload SafeRoute-SA.zip to the repo."
+              exit 1
+            fi
+            echo "No zip to unpack"; exit 0
+          fi
+          for z in "${zips[@]}"; do
+            rm -rf /tmp/unzip && mkdir -p /tmp/unzip
+            unzip -o -q "$z" -d /tmp/unzip
+            src=/tmp/unzip
+            # Handle a zip that has everything inside one folder.
+            if [ ! -f "$src/pubspec.yaml" ]; then
+              inner=$(dirname "$(find /tmp/unzip -maxdepth 3 -name pubspec.yaml | head -1)")
+              [ -n "$inner" ] && src="$inner"
+            fi
+            # GitHub does not let a workflow change workflow files, so those
+            # are created by hand and skipped here.
+            rm -rf "$src/.github"
+            cp -a "$src"/. ./
+            git rm -q --cached "$z" || true
+            rm -f "$z"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Unpack uploaded project zip" || true
+          git push || echo "Push failed; the build will still run."
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create Android project
+        run: |
+          flutter create --platforms=android --org za.saferoute --project-name saferoute_sa .
+          rm -rf test
+          python3 tool/patch_android.py
+
+      - name: Get packages and make icons
+        run: |
+          flutter pub get
+          dart run flutter_launcher_icons
+
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name=1.0.${{ github.run_number }} \
+            --build-number=${{ github.run_number }}
+
+      # Sign with your own key so each new version installs over the old one.
+      - name: Sign APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          if [ -n "$KEYSTORE_PASSWORD" ] && [ -f android-signing/saferoute.p12 ]; then
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            "$BT/apksigner" sign \
+              --ks android-signing/saferoute.p12 --ks-type PKCS12 \
+              --ks-pass env:KEYSTORE_PASSWORD --ks-key-alias saferoute \
+              --out SafeRoute-SA.apk "$APK"
+            "$BT/apksigner" verify SafeRoute-SA.apk
+            echo "Signed with your SafeRoute key."
+          else
+            cp "$APK" SafeRoute-SA.apk
+            echo "::warning::KEYSTORE_PASSWORD secret not set - APK uses a temporary key and will not update over older installs."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafeRoute-SA-apk
+          path: SafeRoute-SA.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: SafeRoute SA 1.0.${{ github.run_number }}
+          body: Download SafeRoute-SA.apk below and open it on your Android phone to install.
+          files: SafeRoute-SA.apk
+          make_latest: true

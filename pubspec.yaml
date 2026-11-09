@@ -1,0 +1,39 @@
+name: saferoute_sa
+description: SafeRoute SA - turn-by-turn navigation for South Africa.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  maplibre_gl: ^0.28.0
+  geolocator: ^14.0.0
+  flutter_tts: ^4.2.0
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  connectivity_plus: ^6.1.0
+  path_provider: ^2.1.4
+  archive: ^4.0.2
+  url_launcher: ^6.3.0
+  share_plus: ^10.1.0
+  package_info_plus: ^8.1.0
+  wakelock_plus: ^1.2.8
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon.png
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon.png"
+  adaptive_icon_background: "#0E7C7B"
+  adaptive_icon_foreground: "assets/icon_fg.png"
+  min_sdk_android: 21

@@ -1,0 +1,76 @@
+name: Build map packs
+
+# Rebuilds the offline province maps from the newest OpenStreetMap data
+# every Sunday night, so the app picks up new roads and changes weekly.
+on:
+  schedule:
+    - cron: '17 0 * * 1'   # Monday 02:17 South African time
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: map-packs
+  cancel-in-progress: false
+
+jobs:
+  maps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pmtiles tool
+        run: |
+          mkdir -p /tmp/pm
+          gh release download --repo protomaps/go-pmtiles --pattern '*Linux_x86_64.tar.gz' -D /tmp/pm
+          tar -xzf /tmp/pm/*.tar.gz -C /tmp/pm
+          sudo mv /tmp/pm/pmtiles /usr/local/bin/pmtiles
+          pmtiles version || true
+
+      - name: Find newest OpenStreetMap build
+        run: |
+          for i in $(seq 0 12); do
+            d=$(date -u -d "-$i day" +%Y%m%d)
+            if curl -sfI "https://build.protomaps.com/$d.pmtiles" > /dev/null; then
+              echo "PROTOMAPS_BUILD=$d" >> "$GITHUB_ENV"
+              echo "Using build $d"
+              exit 0
+            fi
+          done
+          echo "No recent Protomaps build found" && exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Make fonts, icons and style layers
+        run: |
+          mkdir -p out /tmp/assets/fonts /tmp/assets/sprites
+          git clone --depth 1 https://github.com/protomaps/basemaps-assets /tmp/bma
+          for f in "Noto Sans Regular" "Noto Sans Medium" "Noto Sans Italic"; do
+            cp -r "/tmp/bma/fonts/$f" /tmp/assets/fonts/
+          done
+          cp -r /tmp/bma/sprites/v4 /tmp/assets/sprites/v4
+          mkdir -p /tmp/layers && cd /tmp/layers
+          npm init -y > /dev/null
+          npm install --silent @protomaps/basemaps@5
+          cp "$GITHUB_WORKSPACE/tool/make_layers.mjs" .
+          node make_layers.mjs /tmp/assets
+          cd /tmp/assets && zip -q -r "$GITHUB_WORKSPACE/out/map-assets.zip" .
+          ls -la "$GITHUB_WORKSPACE/out"
+
+      - name: Cut province maps
+        run: python3 tool/build_maps.py
+
+      - name: Publish to the maps-latest release
+        run: |
+          gh release view maps-latest > /dev/null 2>&1 || \
+            gh release create maps-latest --title "Offline map packs" \
+              --notes "Weekly offline maps for SafeRoute SA. Map data © OpenStreetMap contributors (ODbL), built by Protomaps." \
+              --latest=false
+          gh release upload maps-latest out/* --clobber
+          gh release edit maps-latest --notes "Offline maps built from OpenStreetMap data of $PROTOMAPS_BUILD. Map data © OpenStreetMap contributors (ODbL), built by Protomaps."

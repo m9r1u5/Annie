@@ -1,0 +1,7 @@
+build/
+.dart_tool/
+.flutter-plugins*
+.packages
+/android/
+/ios/
+*.apk
