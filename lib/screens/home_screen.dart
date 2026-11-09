@@ -14,6 +14,7 @@ import '../services/settings.dart';
 import '../services/style_builder.dart';
 import '../services/voice_service.dart';
 import '../utils/geo.dart';
+import 'favourites_screen.dart';
 import 'maps_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
@@ -563,8 +564,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const SizedBox(height: 12),
         Row(children: [
           Expanded(child: _favButton(Icons.home, 'Home', st.home, true)),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(child: _favButton(Icons.work, 'Work', st.work, false)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(0, 52),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+              ),
+              icon: const Icon(Icons.star),
+              label: const Text('Saved', style: TextStyle(fontSize: 16)),
+              onPressed: _openFavourites,
+            ),
+          ),
         ]),
       ],
     );
@@ -574,24 +588,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return OutlinedButton.icon(
       style: OutlinedButton.styleFrom(
         minimumSize: const Size(0, 52),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
       ),
-      icon: Icon(icon),
-      label: Text(place == null ? 'Set $label' : label, style: const TextStyle(fontSize: 16)),
+      icon: Icon(place == null ? Icons.add : icon),
+      label: Text(label, style: const TextStyle(fontSize: 16)),
       onPressed: () => place == null ? _setFavourite(isHome) : _routeTo(place),
       onLongPress: () => _setFavourite(isHome),
     );
   }
 
+  Future<void> _openFavourites() async {
+    final place = await Navigator.push<Place>(
+      context,
+      MaterialPageRoute(builder: (_) => FavouritesScreen(near: _here)),
+    );
+    if (place != null) _routeTo(place);
+  }
+
+  /// Star button: save the destination under a name, or remove it.
+  Future<void> _toggleFavourite() async {
+    final dest = _dest;
+    if (dest == null) return;
+    final st = s.settings;
+    final existing = st.favouriteAt(dest);
+    if (existing != null) {
+      st.removeFavourite(existing);
+      _toast('Removed "${existing.name}" from Saved.');
+      setState(() {});
+      return;
+    }
+    final name = await askPlaceName(context, dest.name == 'Dropped pin' ? '' : dest.name);
+    if (name == null) return;
+    final saved = Place(name, dest.address.isEmpty ? dest.name : dest.address, dest.lat, dest.lon);
+    st.saveFavourite(saved);
+    setState(() => _dest = saved);
+    _toast('Saved "$name".');
+  }
+
   Widget _previewCard(ColorScheme cs) {
     final r = _route;
+    final isFav = _dest != null && s.settings.favouriteAt(_dest!) != null;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(_dest?.name ?? '',
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+        Row(children: [
+          Expanded(
+            child: Text(_dest?.name ?? '',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          ),
+          IconButton(
+            iconSize: 32,
+            tooltip: isFav ? 'Remove from Saved' : 'Save this place',
+            onPressed: _toggleFavourite,
+            icon: Icon(isFav ? Icons.star : Icons.star_border,
+                color: isFav ? Brand.amber : cs.onSurfaceVariant),
+          ),
+        ]),
         if ((_dest?.address ?? '').isNotEmpty)
           Text(_dest!.address, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(color: cs.onSurfaceVariant)),

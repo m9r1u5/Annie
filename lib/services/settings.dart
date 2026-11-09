@@ -41,6 +41,7 @@ class Settings extends ChangeNotifier {
   Place? home;
   Place? work;
   List<Place> recents = [];
+  List<Place> favourites = [];
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -62,6 +63,12 @@ class Settings extends ChangeNotifier {
     final r = _p.getString('recents');
     if (r != null) {
       recents = (jsonDecode(r) as List)
+          .map((e) => Place.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    final f = _p.getString('favourites');
+    if (f != null) {
+      favourites = (jsonDecode(f) as List)
           .map((e) => Place.fromJson(e as Map<String, dynamic>))
           .toList();
     }
@@ -101,6 +108,7 @@ class Settings extends ChangeNotifier {
     _savePlace('home', home);
     _savePlace('work', work);
     _p.setString('recents', jsonEncode(recents.map((e) => e.toJson()).toList()));
+    _p.setString('favourites', jsonEncode(favourites.map((e) => e.toJson()).toList()));
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }
@@ -118,6 +126,27 @@ class Settings extends ChangeNotifier {
       s.recents.insert(0, place);
       if (s.recents.length > 15) s.recents = s.recents.sublist(0, 15);
     });
+  }
+
+  static bool samePlace(Place a, Place b) =>
+      (a.lat - b.lat).abs() < 1e-5 && (a.lon - b.lon).abs() < 1e-5;
+
+  Place? favouriteAt(Place place) {
+    for (final f in favourites) {
+      if (samePlace(f, place)) return f;
+    }
+    return null;
+  }
+
+  void saveFavourite(Place place) {
+    update((s) {
+      s.favourites.removeWhere((f) => samePlace(f, place));
+      s.favourites.insert(0, place);
+    });
+  }
+
+  void removeFavourite(Place place) {
+    update((s) => s.favourites.removeWhere((f) => samePlace(f, place)));
   }
 
   /// Night colours between 18:30 and 05:30 when theme is auto.

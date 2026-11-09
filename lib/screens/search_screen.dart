@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../main.dart';
 import '../services/settings.dart';
 import '../utils/geo.dart';
+import 'favourites_screen.dart';
 
 /// Search for an address or place. Returns the chosen [Place].
 class SearchScreen extends StatefulWidget {
@@ -80,6 +81,14 @@ class _SearchScreenState extends State<SearchScreen> {
           : Text(p.address, maxLines: 2, overflow: TextOverflow.ellipsis),
       trailing: dist == null ? null : Text(dist),
       onTap: () => Navigator.pop(context, p),
+      onLongPress: () async {
+        final name = await askPlaceName(context, p.name == 'Coordinates' ? '' : p.name);
+        if (name == null || !mounted) return;
+        Services.i.settings
+            .saveFavourite(Place(name, p.address.isEmpty ? p.name : p.address, p.lat, p.lon));
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved "$name".')));
+      },
     );
   }
 
@@ -124,6 +133,12 @@ class _SearchScreenState extends State<SearchScreen> {
           if (showSaved) ...[
             if (st.home != null) _tile(st.home!, Icons.home),
             if (st.work != null) _tile(st.work!, Icons.work),
+            if (st.favourites.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+                child: Text('Saved', style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ...st.favourites.map((p) => _tile(p, Icons.star)),
             if (st.recents.isNotEmpty)
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -134,7 +149,8 @@ class _SearchScreenState extends State<SearchScreen> {
               const Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'Type an address, a place name or a suburb.\n\nTip: on the map, press and hold anywhere to drive there.',
+                  'Type an address, a place name or a suburb.\n\nTips: press and hold a search result to save it. '
+                  'On the map, press and hold anywhere to drive there.',
                   textAlign: TextAlign.center,
                 ),
               ),
