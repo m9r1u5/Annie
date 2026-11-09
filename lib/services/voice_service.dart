@@ -13,13 +13,28 @@ class VoiceService {
   String? _activeLang;
   bool afrikaansAvailable = false;
 
-  Future<void> init() async {
+  /// Voice used for Afrikaans: a real Afrikaans voice, or a Dutch voice as
+  /// a stand-in (Dutch voices read Afrikaans quite understandably).
+  String? afrikaansVoiceLocale;
+  bool get afrikaansIsDutch => afrikaansVoiceLocale != null && afrikaansVoiceLocale != 'af-ZA';
+
+  Future<bool> _has(String locale) async {
     try {
-      final af = await _tts.isLanguageAvailable('af-ZA');
-      afrikaansAvailable = af == true || af == 1;
+      final r = await _tts.isLanguageAvailable(locale);
+      return r == true || r == 1;
     } catch (_) {
-      afrikaansAvailable = false;
+      return false;
     }
+  }
+
+  Future<void> init() async {
+    for (final l in ['af-ZA', 'nl-NL', 'nl-BE']) {
+      if (await _has(l)) {
+        afrikaansVoiceLocale = l;
+        break;
+      }
+    }
+    afrikaansAvailable = afrikaansVoiceLocale != null;
     await _tts.setSpeechRate(0.5);
     await _tts.setVolume(1.0);
     await _applyLanguage();
@@ -32,7 +47,7 @@ class VoiceService {
     if (_activeLang == lang) return;
     try {
       if (lang == 'af') {
-        await _tts.setLanguage('af-ZA');
+        await _tts.setLanguage(afrikaansVoiceLocale!);
       } else {
         final za = await _tts.isLanguageAvailable('en-ZA');
         await _tts.setLanguage(za == true || za == 1 ? 'en-ZA' : 'en-GB');

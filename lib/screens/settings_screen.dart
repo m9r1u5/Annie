@@ -83,10 +83,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         ListTile(
           title: const Text('Voice language'),
-          subtitle: Text(st.voiceLang == 'af' && !s.voice.afrikaansAvailable
-              ? 'No Afrikaans voice on this phone. Install one under Settings › Text-to-speech, then reopen the app. Using English for now.'
-              : (st.voiceLang == 'af' ? 'Afrikaans' : 'English')),
-          trailing: SegmentedButton<String>(
+          subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(st.voiceLang != 'af'
+                ? 'English'
+                : !s.voice.afrikaansAvailable
+                    ? 'No Afrikaans or Dutch voice on this phone. Using English for now.'
+                    : s.voice.afrikaansIsDutch
+                        ? 'Afrikaans directions, read by the Dutch voice (this phone has no Afrikaans voice).'
+                        : 'Afrikaans'),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
             segments: const [
               ButtonSegment(value: 'en', label: Text('EN')),
               ButtonSegment(value: 'af', label: Text('AF')),
@@ -96,7 +102,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _set((x) => x.voiceLang = v.first);
               s.voice.say(s.voice.lang == 'af' ? 'Afrikaans stem gekies.' : 'English voice selected.');
             },
-          ),
+            ),
+          ]),
         ),
         _header('Route options'),
         SwitchListTile(
