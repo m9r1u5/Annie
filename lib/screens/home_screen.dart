@@ -18,6 +18,7 @@ import 'favourites_screen.dart';
 import 'maps_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
+import 'zones_screen.dart';
 
 enum Mode { browse, preview, driving }
 
@@ -242,7 +243,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       await m.clearLines();
       await m.clearCircles();
+      await m.clearFills();
     } catch (_) {}
+    // Your avoid zones, shaded on the map.
+    if (s.settings.avoidZones) {
+      try {
+        for (final z in s.settings.zones) {
+          if (!z.enabled || z.points.length < 3) continue;
+          final ring = [...z.points, z.points.first].map((p) => LatLng(p.lat, p.lon)).toList();
+          final color = z.nightOnly ? zoneAmber : zoneRed;
+          await m.addFill(FillOptions(geometry: [ring], fillColor: color, fillOpacity: 0.18));
+          await m.addLine(LineOptions(geometry: ring, lineColor: color, lineWidth: 2, lineOpacity: 0.8));
+        }
+      } catch (_) {}
+    }
     final r = _route;
     if (r == null || _mode == Mode.browse) return;
     final geom = r.points.map((p) => LatLng(p.lat, p.lon)).toList();
@@ -251,6 +265,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           geometry: geom, lineColor: '#0D47A1', lineWidth: 11, lineOpacity: 0.9));
       await m.addLine(LineOptions(
           geometry: geom, lineColor: Brand.routeBlue, lineWidth: 7, lineOpacity: 1));
+      // Stretches that go through a zone are drawn red.
+      for (final h in r.hits) {
+        for (final st in h.stretches) {
+          if (st.length < 2) continue;
+          await m.addLine(LineOptions(
+            geometry: st.map((p) => LatLng(p.lat, p.lon)).toList(),
+            lineColor: zoneRed,
+            lineWidth: 9,
+          ));
+        }
+      }
       final d = r.points.last;
       await m.addCircle(CircleOptions(
         geometry: LatLng(d.lat, d.lon),
@@ -399,6 +424,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 myLocationRenderMode: _hasLocation
                     ? MyLocationRenderMode.gps
                     : MyLocationRenderMode.normal,
+                // Zones underneath, route lines and dots on top.
+                annotationOrder: const [
+                  AnnotationType.fill,
+                  AnnotationType.line,
+                  AnnotationType.circle,
+                  AnnotationType.symbol,
+                ],
                 compassEnabled: false,
                 attributionButtonPosition: AttributionButtonPosition.bottomLeft,
                 onMapCreated: (c) => _map = c,
@@ -474,6 +506,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
               _buildStyle();
             }, tooltip: 'Settings'),
+            const SizedBox(width: 10),
+            _roundButton(Icons.shield, _openZones,
+                tooltip: 'Safety avoid zones',
+                color: s.settings.avoidZones && s.settings.zones.any((z) => z.enabled)
+                    ? const Color(0xFFE53935)
+                    : null),
             const Spacer(),
             if (!offline)
               Expanded(
@@ -598,6 +636,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openZones() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => ZonesScreen(start: _here)));
+    if (!mounted) return;
+    setState(() {});
+    // Zones may have changed: work out the route again.
+    if (_mode == Mode.preview && _dest != null) {
+      _routeTo(_dest!);
+    } else {
+      _drawRoute();
+    }
+  }
+
   Future<void> _openFavourites() async {
     final place = await Navigator.push<Place>(
       context,
@@ -624,6 +674,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     st.saveFavourite(saved);
     setState(() => _dest = saved);
     _toast('Saved "$name".');
+  }
+
+  Widget _zoneWarning(RouteResult r) {
+    final lines = <String>[
+      ...r.notes,
+      for (final h in r.hits) 'Goes through "${h.zone.name}" for ${formatDistance(h.metres)}.',
+    ];
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE53935).withValues(alpha: 0.15),
+        border: Border.all(color: const Color(0xFFE53935), width: 2),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.warning_amber, color: Color(0xFFE53935), size: 30),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(r.passesZones ? 'No route avoids your zones' : 'Safety note',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 4),
+            ...lines.map((l) => Text(l)),
+            if (r.passesZones) const Text('The red part of the route is inside the zone.'),
+          ]),
+        ),
+      ]),
+    );
   }
 
   Widget _previewCard(ColorScheme cs) {
@@ -659,6 +738,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         else if (r != null)
           Text('${formatDuration(r.totalS)} · ${formatDistance(r.totalM)}',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: cs.primary)),
+        if (r != null && !_loadingRoute && (r.passesZones || r.notes.isNotEmpty))
+          _zoneWarning(r)
+        else if (r != null && !_loadingRoute && s.settings.activeZones().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: [
+              const Icon(Icons.verified_user, color: Color(0xFF43A047), size: 20),
+              const SizedBox(width: 6),
+              Text('Avoids all your zones', style: TextStyle(color: cs.onSurfaceVariant)),
+            ]),
+          ),
         const SizedBox(height: 14),
         Row(children: [
           IconButton.filledTonal(
@@ -670,9 +760,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(width: 12),
           Expanded(
             child: FilledButton.icon(
+              style: r != null && r.passesZones
+                  ? FilledButton.styleFrom(backgroundColor: const Color(0xFFE53935))
+                  : null,
               onPressed: r == null ? null : _startDriving,
-              icon: const Icon(Icons.navigation),
-              label: const Text('Go'),
+              icon: Icon(r != null && r.passesZones ? Icons.warning_amber : Icons.navigation),
+              label: Text(r != null && r.passesZones ? 'Drive anyway' : 'Go'),
             ),
           ),
         ]),
@@ -722,6 +815,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
+      if (!_nav.rerouting && (_nav.route?.passesZones ?? false))
+        Positioned(
+          top: top + 120,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Chip(
+              backgroundColor: const Color(0xFFE53935),
+              avatar: const Icon(Icons.warning_amber, color: Colors.white, size: 18),
+              label: Text('Route passes "${_nav.route!.hits.first.zone.name}"',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ),
       if (_nav.rerouting)
         Positioned(
           top: top + 120,

@@ -6,6 +6,7 @@ import '../config.dart';
 import '../main.dart';
 import '../services/settings.dart';
 import 'maps_screen.dart';
+import 'zones_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -123,10 +124,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: st.avoidGravel,
           onChanged: (v) => _set((x) => x.avoidGravel = v),
         ),
-        const ListTile(
-          leading: Icon(Icons.shield_outlined),
-          title: Text('Safety avoid zones'),
-          subtitle: Text('Coming in the next update: draw areas on the map for routes to avoid.'),
+        ListTile(
+          leading: const Icon(Icons.shield),
+          title: const Text('Safety avoid zones'),
+          subtitle: Text(!st.avoidZones
+              ? 'Off'
+              : st.zones.isEmpty
+                  ? 'Draw areas on the map for routes to avoid'
+                  : '${st.zones.where((z) => z.enabled).length} of ${st.zones.length} zone(s) on'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const ZonesScreen()));
+            if (mounted) setState(() {});
+          },
         ),
         _header('Display'),
         ListTile(

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/geo.dart';
+import 'zones.dart';
 
 class Place {
   final String name;
@@ -42,6 +43,9 @@ class Settings extends ChangeNotifier {
   Place? work;
   List<Place> recents = [];
   List<Place> favourites = [];
+  List<AvoidZone> zones = [];
+  bool avoidZones = true;
+  bool nightStricter = true;
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -66,6 +70,14 @@ class Settings extends ChangeNotifier {
           .map((e) => Place.fromJson(e as Map<String, dynamic>))
           .toList();
     }
+    final z = _p.getString('zones');
+    if (z != null) {
+      zones = (jsonDecode(z) as List)
+          .map((e) => AvoidZone.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    avoidZones = _p.getBool('avoidZones') ?? true;
+    nightStricter = _p.getBool('nightStricter') ?? true;
     final f = _p.getString('favourites');
     if (f != null) {
       favourites = (jsonDecode(f) as List)
@@ -109,6 +121,9 @@ class Settings extends ChangeNotifier {
     _savePlace('work', work);
     _p.setString('recents', jsonEncode(recents.map((e) => e.toJson()).toList()));
     _p.setString('favourites', jsonEncode(favourites.map((e) => e.toJson()).toList()));
+    _p.setString('zones', jsonEncode(zones.map((e) => e.toJson()).toList()));
+    _p.setBool('avoidZones', avoidZones);
+    _p.setBool('nightStricter', nightStricter);
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }
@@ -126,6 +141,27 @@ class Settings extends ChangeNotifier {
       s.recents.insert(0, place);
       if (s.recents.length > 15) s.recents = s.recents.sublist(0, 15);
     });
+  }
+
+  /// After dark: 18:30 to 05:30.
+  static bool get isAfterDark {
+    final now = DateTime.now();
+    final mins = now.hour * 60 + now.minute;
+    return mins >= 18 * 60 + 30 || mins < 5 * 60 + 30;
+  }
+
+  /// Extra margin around zones at night when "stricter after dark" is on.
+  static const nightMarginM = 300.0;
+
+  /// Zones that apply right now (switched on, and the time is right).
+  List<ActiveZone> activeZones() {
+    if (!avoidZones) return const [];
+    final dark = isAfterDark;
+    final margin = dark && nightStricter ? nightMarginM : 0.0;
+    return zones
+        .where((z) => z.enabled && z.points.length >= 3 && (!z.nightOnly || dark))
+        .map((z) => ActiveZone(z, z.grown(margin)))
+        .toList();
   }
 
   static bool samePlace(Place a, Place b) =>
