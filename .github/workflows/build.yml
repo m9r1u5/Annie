@@ -63,6 +63,36 @@ jobs:
           channel: stable
           cache: true
 
+      # Afrikaans voice clips, made once with Meta's free MMS Afrikaans voice
+      # and reused until tool/af_voice.py changes.
+      - name: Reuse Afrikaans voice clips
+        id: afcache
+        uses: actions/cache/restore@v4
+        with:
+          path: assets/voice_af
+          key: af-voice-${{ hashFiles('tool/af_voice.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.afcache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.11'
+
+      - name: Make Afrikaans voice clips
+        if: steps.afcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet "transformers>=4.40" numpy
+          python tool/af_voice.py
+          ls -la assets/voice_af | head -80
+
+      - name: Save Afrikaans voice clips for next time
+        if: steps.afcache.outputs.cache-hit != 'true' && hashFiles('assets/voice_af/clips.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: assets/voice_af
+          key: af-voice-${{ hashFiles('tool/af_voice.py') }}
+
       - name: Create Android project
         run: |
           flutter create --platforms=android --org za.saferoute --project-name saferoute_sa .

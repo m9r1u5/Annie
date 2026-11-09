@@ -87,10 +87,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text(st.voiceLang != 'af'
                 ? 'English'
                 : !s.voice.afrikaansAvailable
-                    ? 'No Afrikaans or Dutch voice on this phone. Using English for now.'
-                    : s.voice.afrikaansIsDutch
-                        ? 'Afrikaans directions, read by the Dutch voice (this phone has no Afrikaans voice).'
-                        : 'Afrikaans'),
+                    ? 'No Afrikaans voice available. Using English for now.'
+                    : s.voice.afrikaansVoiceLocale == 'af-ZA'
+                        ? 'Afrikaans'
+                        : s.voice.hasAfrikaansClips
+                            ? 'Afrikaans voice. Street names are shown on screen, not spoken.'
+                            : 'Afrikaans directions, read by the Dutch voice (no Afrikaans voice found).'),
             const SizedBox(height: 8),
             SegmentedButton<String>(
             segments: const [
@@ -100,7 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             selected: {st.voiceLang},
             onSelectionChanged: (v) {
               _set((x) => x.voiceLang = v.first);
-              s.voice.say(s.voice.lang == 'af' ? 'Afrikaans stem gekies.' : 'English voice selected.');
+              s.voice.sayLanguageSelected();
             },
             ),
           ]),
@@ -179,7 +181,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           leading: Icon(Icons.info_outline),
           title: Text('Map data and credits'),
           subtitle: Text('Map data © OpenStreetMap contributors (ODbL). Map tiles: Protomaps, '
-              'OpenFreeMap / OpenMapTiles. Routing: Valhalla (FOSSGIS server). Search: Photon by Komoot.'),
+              'OpenFreeMap / OpenMapTiles. Routing: Valhalla (FOSSGIS server). Search: Photon by Komoot. '
+              'Afrikaans voice: Meta MMS-TTS (CC-BY-NC 4.0, non-commercial use).'),
         ),
         const SizedBox(height: 32),
       ]),

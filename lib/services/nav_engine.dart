@@ -41,7 +41,7 @@ class NavEngine extends ChangeNotifier {
 
   void start(RouteResult r) {
     setRoute(r);
-    voice.say(voice.started());
+    voice.sayStarted();
   }
 
   void setRoute(RouteResult r) {
@@ -87,7 +87,7 @@ class NavEngine extends ChangeNotifier {
         _lastReroute = DateTime.now();
         rerouting = true;
         notifyListeners();
-        voice.say(voice.rerouting());
+        voice.sayRerouting();
         onOffRoute(p, heading).whenComplete(() {
           rerouting = false;
           notifyListeners();
@@ -116,7 +116,7 @@ class NavEngine extends ChangeNotifier {
 
     if (remainingM < 30) {
       arrived = true;
-      voice.say(voice.now(r.maneuvers.last));
+      voice.sayNow(r.maneuvers.last);
       notifyListeners();
       return;
     }
@@ -141,11 +141,11 @@ class NavEngine extends ChangeNotifier {
     final key = '$nextIndex';
 
     if (d <= nowDist) {
-      if (_spoken.add('$key-now')) voice.say(voice.now(m));
+      if (_spoken.add('$key-now')) voice.sayNow(m);
     } else if (d <= near) {
-      if (_spoken.add('$key-near')) voice.say(voice.announcement(m, d));
+      if (_spoken.add('$key-near')) voice.sayAnnouncement(m, d);
     } else if (d <= far && d > near + 50) {
-      if (_spoken.add('$key-far')) voice.say(voice.announcement(m, d));
+      if (_spoken.add('$key-far')) voice.sayAnnouncement(m, d);
     }
   }
 }

@@ -21,6 +21,7 @@ dependencies:
   share_plus: ^10.1.0
   package_info_plus: ^8.1.0
   wakelock_plus: ^1.2.8
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.1
@@ -29,6 +30,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon.png
+    - assets/voice_af/
 
 flutter_launcher_icons:
   android: true
