@@ -63,8 +63,8 @@ jobs:
           channel: stable
           cache: true
 
-      # Afrikaans voice clips, made once with Meta's free MMS Afrikaans voice
-      # and reused until tool/af_voice.py changes.
+      # Afrikaans voice clips, made once (Google Translate's Afrikaans voice,
+      # eSpeak NG as backup) and reused until tool/af_voice.py changes.
       - name: Reuse Afrikaans voice clips
         id: afcache
         uses: actions/cache/restore@v4
@@ -81,8 +81,9 @@ jobs:
         if: steps.afcache.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
-          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
-          pip install --quiet "transformers>=4.40" numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng > /dev/null
+          pip install --quiet gTTS
           python tool/af_voice.py
           ls -la assets/voice_af | head -80
 

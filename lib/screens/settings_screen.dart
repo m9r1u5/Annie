@@ -182,7 +182,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           title: Text('Map data and credits'),
           subtitle: Text('Map data © OpenStreetMap contributors (ODbL). Map tiles: Protomaps, '
               'OpenFreeMap / OpenMapTiles. Routing: Valhalla (FOSSGIS server). Search: Photon by Komoot. '
-              'Afrikaans voice: Meta MMS-TTS (CC-BY-NC 4.0, non-commercial use).'),
+              'Afrikaans voice clips: Google Translate voice / eSpeak NG, for personal use.'),
         ),
         const SizedBox(height: 32),
       ]),
