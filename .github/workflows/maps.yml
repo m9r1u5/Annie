@@ -6,6 +6,14 @@ on:
   schedule:
     - cron: '17 0 * * 1'   # Monday 02:17 South African time
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tool/build_maps.py'
+      - 'tool/split_routing.py'
+      - 'tool/build_search.py'
+      - 'tool/provinces.py'
+      - '.github/workflows/maps.yml'
 
 permissions:
   contents: write
@@ -62,6 +70,48 @@ jobs:
           node make_layers.mjs /tmp/assets
           cd /tmp/assets && zip -q -r "$GITHUB_WORKSPACE/out/map-assets.zip" .
           ls -la "$GITHUB_WORKSPACE/out"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download South Africa OpenStreetMap data
+        run: |
+          curl -sSL --retry 3 -o /tmp/sa.osm.pbf https://download.geofabrik.de/africa/south-africa-latest.osm.pbf
+          ls -la /tmp/sa.osm.pbf
+
+      # Offline routing: Valhalla road network tiles, split per province.
+      - name: Build offline routing data
+        continue-on-error: true
+        run: |
+          set -e
+          mkdir -p /tmp/vh/tiles
+          IMG=ghcr.io/valhalla/valhalla:3.6.3
+          docker pull $IMG || { IMG=ghcr.io/valhalla/valhalla:latest; docker pull $IMG; }
+          echo "Using $IMG"
+          run() { docker run --rm -v /tmp/vh:/data -v /tmp:/osm "$IMG" "$@"; }
+          run valhalla_build_config \
+            --mjolnir-tile-dir /data/tiles \
+            --mjolnir-admin /data/admins.sqlite \
+            --mjolnir-timezone /data/timezones.sqlite > /tmp/vh/valhalla.json
+          run bash -c "valhalla_build_timezones > /data/timezones.sqlite" || echo "No timezones (fine)"
+          run valhalla_build_admins -c /data/valhalla.json /osm/sa.osm.pbf
+          run valhalla_build_tiles -c /data/valhalla.json /osm/sa.osm.pbf
+          sudo chown -R "$(id -u)" /tmp/vh
+          du -sh /tmp/vh/tiles
+          python3 tool/split_routing.py /tmp/vh/tiles out
+          rm -rf /tmp/vh
+
+      # Offline search: places, shops, streets and addresses per province.
+      - name: Build offline search data
+        continue-on-error: true
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osmium-tool > /dev/null
+          pip install --quiet osmium
+          osmium tags-filter /tmp/sa.osm.pbf nw/name nw/addr:housenumber n/place -o /tmp/search.osm.pbf --overwrite
+          python3 tool/build_search.py /tmp/search.osm.pbf out
 
       - name: Cut province maps
         run: python3 tool/build_maps.py
