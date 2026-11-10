@@ -107,7 +107,7 @@ jobs:
 
       - name: Build release APK
         run: |
-          flutter build apk --release \
+          flutter build apk --release --target-platform android-arm64 \
             --build-name=1.0.${{ github.run_number }} \
             --build-number=${{ github.run_number }}
 
