@@ -17,11 +17,19 @@ class TrafficAlt {
 }
 
 /// Live traffic for a route.
+/// A speed limit that starts at [start] and lasts until the next one.
+class LimitStart {
+  final GeoPoint start;
+  final int kmh;
+  const LimitStart(this.start, this.kmh);
+}
+
 class TrafficCheck {
   final double timeS; // travel time with traffic for your route
   final double delayS; // how much of that is traffic delay
   final TrafficAlt? faster; // a quicker route that avoids your zones
-  const TrafficCheck(this.timeS, this.delayS, this.faster);
+  final List<LimitStart> limits; // speed limits along your route
+  const TrafficCheck(this.timeS, this.delayS, this.faster, [this.limits = const []]);
 
   double get savingS => faster == null ? 0 : timeS - faster!.timeS;
 }
@@ -142,6 +150,7 @@ class TrafficService {
       'alternativeType': 'betterRoute',
       'minDeviationDistance': '0',
       'routeRepresentation': 'polyline',
+      'sectionType': 'speedLimit',
       'avoid': [
         if (settings.avoidTolls) 'tollRoads',
         if (settings.avoidHighways) 'motorways',
@@ -195,6 +204,23 @@ class TrafficService {
     final timeS = ((refSum['travelTimeInSeconds'] as num?) ?? 0).toDouble();
     final delayS = ((refSum['trafficDelayInSeconds'] as num?) ?? 0).toDouble();
 
+    // Speed limits along your route.
+    final refPts = <GeoPoint>[];
+    for (final leg in (ref['legs'] as List? ?? const [])) {
+      for (final p in ((leg as Map)['points'] as List? ?? const [])) {
+        refPts.add(GeoPoint((p['latitude'] as num).toDouble(), (p['longitude'] as num).toDouble()));
+      }
+    }
+    final limits = <LimitStart>[];
+    for (final sRaw in (ref['sections'] as List? ?? const [])) {
+      final sec = sRaw as Map<String, dynamic>;
+      if (sec['sectionType'] != 'SPEED_LIMIT') continue;
+      final i = ((sec['startPointIndex'] as num?) ?? -1).toInt();
+      final kmh = ((sec['maxSpeedLimitInKmh'] as num?) ?? 0).toInt();
+      if (i < 0 || i >= refPts.length || kmh <= 0) continue;
+      limits.add(LimitStart(refPts[i], kmh));
+    }
+
     TrafficAlt? best;
     for (final raw in routes.skip(1)) {
       final route = raw as Map<String, dynamic>;
@@ -214,7 +240,7 @@ class TrafficService {
       );
       if (alt.timeS < timeS && (best == null || alt.timeS < best.timeS)) best = alt;
     }
-    return TrafficCheck(timeS, delayS, best);
+    return TrafficCheck(timeS, delayS, best, limits);
   }
 
   /// Incidents inside a box (west, south, east, north). TomTom allows up to

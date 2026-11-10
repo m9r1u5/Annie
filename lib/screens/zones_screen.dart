@@ -165,6 +165,7 @@ class _ZonesScreenState extends State<ZonesScreen> {
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setD) => AlertDialog(
+          scrollable: true,
           title: Text(title),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(

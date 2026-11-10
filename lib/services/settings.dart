@@ -49,6 +49,7 @@ class Settings extends ChangeNotifier {
   String tomtomKey = '';
   bool showTraffic = true;
   bool autoFaster = true;
+  bool auto3d = true;
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -84,6 +85,7 @@ class Settings extends ChangeNotifier {
     tomtomKey = _p.getString('tomtomKey') ?? '';
     showTraffic = _p.getBool('showTraffic') ?? true;
     autoFaster = _p.getBool('autoFaster') ?? true;
+    auto3d = _p.getBool('auto3d') ?? true;
     final f = _p.getString('favourites');
     if (f != null) {
       favourites = (jsonDecode(f) as List)
@@ -133,6 +135,7 @@ class Settings extends ChangeNotifier {
     _p.setString('tomtomKey', tomtomKey);
     _p.setBool('showTraffic', showTraffic);
     _p.setBool('autoFaster', autoFaster);
+    _p.setBool('auto3d', auto3d);
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }

@@ -55,6 +55,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _trafficTimer;
   bool _checkingTraffic = false;
   bool _switching = false;
+
+  // Speed limits along the current route: (distance from start, km/h).
+  List<(double, int)> _limits = [];
+  RouteResult? _limitsFor;
+
+  // Auto 3D in towns
+  bool _manual3d = false;
+  DateTime _last3dSwitch = DateTime.fromMillisecondsSinceEpoch(0);
+  final List<(DateTime, double)> _speedLog = [];
   bool _arrivedShown = false;
 
   late final NavEngine _nav = NavEngine(voice: s.voice, onOffRoute: _reroute);
@@ -180,6 +189,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_mode == Mode.driving) {
       _nav.onPosition(GeoPoint(p.latitude, p.longitude), p.speed,
           p.heading >= 0 ? p.heading : null);
+      _maybeAuto3d();
       if (_follow) _followCamera();
     }
   }
@@ -269,6 +279,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _traffic = results[0] as TrafficCheck?;
       _checkingTraffic = false;
     });
+    _setLimits(_traffic, r, 0);
     await _drawRoute();
   }
 
@@ -308,6 +319,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _nav.trafficFactor = r.totalS > 0 ? alt.timeS / r.totalS : 1.0;
         s.voice.sayFaster();
         _toast('Faster route: saves ${formatDuration(saved)}.');
+        // Fetch speed limits for the new route.
+        Future.delayed(const Duration(seconds: 3), _drivingTraffic);
       }
       await _drawRoute();
       return true;
@@ -338,6 +351,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           : _nav.route!.totalS * _nav.remainingM / _nav.route!.totalM;
       if (normal > 0) _nav.trafficFactor = (check.timeS / normal).clamp(0.5, 4.0);
       setState(() => _traffic = check);
+      if (_nav.route != null) _setLimits(check, _nav.route!, _nav.progressM);
       if (s.settings.autoFaster && check.faster != null && check.savingS >= 180) {
         await _useFaster(driving: true);
       }
@@ -427,16 +441,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _arrivedShown = false;
     });
     if (s.settings.keepScreenOn) WakelockPlus.enable();
+    _manual3d = false;
+    _speedLog.clear();
     _nav.start(r);
     final t0 = _traffic;
     if (t0 != null && r.totalS > 0) _nav.trafficFactor = (t0.timeS / r.totalS).clamp(0.5, 4.0);
     if (_pos != null) _onPosition(_pos!);
     _followCamera();
     _startTrafficTimer();
+    // No speed limits yet for this route: fetch them shortly.
+    if (s.settings.hasTraffic && !identical(_limitsFor, r)) {
+      Future.delayed(const Duration(seconds: 5), _drivingTraffic);
+    }
   }
 
   void _cancel() {
     _trafficTimer?.cancel();
+    _limits = [];
+    _limitsFor = null;
     _traffic = null;
     _incidents = [];
     _nav.stop();
@@ -448,6 +470,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     _drawRoute();
     _map?.animateCamera(CameraUpdate.tiltTo(0));
+  }
+
+  /// Places TomTom's speed-limit changes along [route].
+  void _setLimits(TrafficCheck? check, RouteResult route, double fromM) {
+    if (check == null || check.limits.isEmpty) return;
+    final out = <(double, int)>[];
+    final startSeg = route.points.isEmpty
+        ? 0
+        : snapToLine(route.points, route.points.first).segment; // 0
+    for (final l in check.limits) {
+      final sn = snapToLine(route.points, l.start, from: startSeg);
+      if (sn.offRouteM > 40) continue;
+      final segLen = route.cum[sn.segment + 1] - route.cum[sn.segment];
+      final along = route.cum[sn.segment] + segLen * sn.fraction;
+      if (along + 50 < fromM && out.isNotEmpty) continue;
+      out.add((along, l.kmh));
+    }
+    out.sort((a, b) => a.$1.compareTo(b.$1));
+    _limits = out;
+    _limitsFor = route;
+  }
+
+  /// Speed limit where you are now, if known.
+  int? get _currentLimit {
+    if (_limits.isEmpty || !identical(_limitsFor, _nav.route)) return null;
+    int? kmh;
+    for (final l in _limits) {
+      if (l.$1 <= _nav.progressM + 10) {
+        kmh = l.$2;
+      } else {
+        break;
+      }
+    }
+    return kmh;
+  }
+
+  /// Auto 3D: on in towns (limit 60 or less, or slow driving), off on open roads.
+  void _maybeAuto3d() {
+    if (!s.settings.auto3d || _manual3d || _mode != Mode.driving) return;
+    final now = DateTime.now();
+    _speedLog.add((now, _nav.speedKmh));
+    _speedLog.removeWhere((e) => now.difference(e.$1).inSeconds > 45);
+    if (now.difference(_last3dSwitch).inSeconds < 30) return;
+    bool? town;
+    final lim = _currentLimit;
+    if (lim != null) {
+      if (lim <= 60) town = true;
+      if (lim >= 80) town = false;
+    } else if (_speedLog.length > 5 && now.difference(_speedLog.first.$1).inSeconds >= 30) {
+      final avg = _speedLog.fold<double>(0, (a, e) => a + e.$2) / _speedLog.length;
+      if (avg < 45) town = true;
+      if (avg > 75) town = false;
+    }
+    if (town == null || town == _is3d) return;
+    _last3dSwitch = now;
+    setState(() => _is3d = town!);
+    _apply3dBuildings();
   }
 
   /// "Accident ahead · 1.2 km" for the next incident within 5 km.
@@ -494,6 +573,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _toggle3d() async {
+    if (_mode == Mode.driving) _manual3d = true; // you chose: no auto switching this trip
     setState(() => _is3d = !_is3d);
     await _apply3dBuildings();
     if (_mode == Mode.driving && _follow) {
@@ -1029,24 +1109,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
-      // Speed bubble
+      // Speed limit sign and your speed (red when you're over the limit)
       Positioned(
         left: 12,
         bottom: 150 + MediaQuery.of(context).padding.bottom,
-        child: Container(
-          width: 72,
-          height: 72,
-          decoration: BoxDecoration(
-            color: cs.surface,
-            shape: BoxShape.circle,
-            boxShadow: const [BoxShadow(blurRadius: 8, color: Colors.black26)],
-          ),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text(_nav.speedKmh.round().toString(),
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
-            const Text('km/h', style: TextStyle(fontSize: 11)),
-          ]),
-        ),
+        child: Builder(builder: (context) {
+          final limit = _currentLimit;
+          final over = limit != null && _nav.speedKmh > limit + 5;
+          return Column(mainAxisSize: MainAxisSize.min, children: [
+            if (limit != null)
+              Container(
+                width: 64,
+                height: 64,
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFD32F2F), width: 7),
+                  boxShadow: const [BoxShadow(blurRadius: 8, color: Colors.black26)],
+                ),
+                child: Center(
+                  child: Text('$limit',
+                      style: const TextStyle(
+                          fontSize: 22, fontWeight: FontWeight.w900, color: Colors.black)),
+                ),
+              ),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: over ? const Color(0xFFD32F2F) : cs.surface,
+                shape: BoxShape.circle,
+                boxShadow: const [BoxShadow(blurRadius: 8, color: Colors.black26)],
+              ),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Text(_nav.speedKmh.round().toString(),
+                    style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        color: over ? Colors.white : null)),
+                Text('km/h', style: TextStyle(fontSize: 11, color: over ? Colors.white : null)),
+              ]),
+            ),
+          ]);
+        }),
       ),
       // Right buttons
       Positioned(

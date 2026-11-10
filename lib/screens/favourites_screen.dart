@@ -11,6 +11,7 @@ Future<String?> askPlaceName(BuildContext context, String initial, {String title
   return showDialog<String>(
     context: context,
     builder: (c) => AlertDialog(
+      scrollable: true,
       title: Text(title),
       content: TextField(
         controller: ctrl,

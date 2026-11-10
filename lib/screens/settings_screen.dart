@@ -68,6 +68,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (c) => StatefulBuilder(
         builder: (c, setD) => AlertDialog(
+          scrollable: true,
           title: const Text('TomTom API key'),
           content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Sign in at developer.tomtom.com, open Dashboard › API Keys, copy your key and paste it here.'),
@@ -231,6 +232,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             selected: {st.theme},
             onSelectionChanged: (v) => _set((x) => x.theme = v.first),
           ),
+        ),
+        SwitchListTile(
+          title: const Text('Auto 3D in towns'),
+          subtitle: const Text('Switches to 3D where the speed limit is 60 or less (or when '
+              'you drive slowly) and back to 2D on open roads. Tapping 2D/3D while '
+              'driving turns this off for that trip.'),
+          value: st.auto3d,
+          onChanged: (v) => _set((x) => x.auto3d = v),
         ),
         SwitchListTile(
           title: const Text('Keep screen on while driving'),
