@@ -195,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _followCamera() {
-    final target = _nav.snapped ?? _here;
+    final target = _nav.offRoute ? (_here ?? _nav.snapped) : (_nav.snapped ?? _here);
     if (target == null || _map == null) return;
     _map!.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
@@ -254,14 +254,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final dest = _dest;
     if (dest == null) return;
     try {
-      final r = await s.routing.route(from, dest.point, headingDeg: heading);
+      RouteResult r;
+      try {
+        r = await s.routing.route(from, dest.point, headingDeg: heading);
+      } catch (_) {
+        // Try once more without the driving direction (it can confuse the
+        // router on big interchanges and when GPS direction is off).
+        r = await s.routing.route(from, dest.point);
+      }
       if (!mounted || _mode != Mode.driving) return;
       _route = r;
       _nav.setRoute(r);
       await _drawRoute();
       _drivingTraffic();
-    } catch (_) {
-      // Keep the old route; another attempt follows after 15 seconds.
+    } catch (e) {
+      // Keep the old route; another attempt follows in 10 seconds.
+      _nav.rerouteError = e.toString().replaceFirst('Exception: ', '');
+      if (mounted) setState(() {});
     }
   }
 
@@ -1054,11 +1063,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(children: [
-              Icon(VoiceService.iconFor(m), color: Colors.white, size: 56),
+              Icon(_nav.offRoute ? Icons.wrong_location : VoiceService.iconFor(m), color: Colors.white, size: 56),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(formatDistance(_nav.distToNextM),
+                  Text(_nav.offRoute ? (s.voice.lang == 'af' ? 'Van roete af' : 'Off route') : formatDistance(_nav.distToNextM),
                       style: const TextStyle(
                           color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800)),
                   Text(
@@ -1075,7 +1084,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
-      if (!_nav.rerouting && (_nav.route?.passesZones ?? false))
+      if (!_nav.rerouting && !_nav.offRoute && (_nav.route?.passesZones ?? false))
         Positioned(
           top: top + 120,
           left: 0,
@@ -1100,6 +1109,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               avatar: const Icon(Icons.report, color: Colors.white, size: 18),
               label: Text(_nextIncidentText()!,
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ),
+      if (!_nav.rerouting && _nav.offRoute && _nav.rerouteError != null)
+        Positioned(
+          top: top + 120,
+          left: 16,
+          right: 16,
+          child: Center(
+            child: Material(
+              color: const Color(0xFFD32F2F),
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Text(
+                  "Can't find a new route yet (trying again): ${_nav.rerouteError}",
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+              ),
             ),
           ),
         ),

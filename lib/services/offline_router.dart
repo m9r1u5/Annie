@@ -11,7 +11,7 @@ class OfflineRouter {
   static Future<Map<String, dynamic>> route(String tilesDir, Map<String, dynamic> body) async {
     final answer = await _channel
         .invokeMethod<String>('route', {'tilesDir': tilesDir, 'request': jsonEncode(body)})
-        .timeout(const Duration(seconds: 30));
+        .timeout(const Duration(seconds: 15));
     if (answer == null) throw Exception('No answer from the offline route engine');
     return jsonDecode(answer) as Map<String, dynamic>;
   }

@@ -42,6 +42,13 @@ class NavEngine extends ChangeNotifier {
   double? heading;
 
   int _offCount = 0;
+
+  /// True while you are away from the route (camera then follows your GPS).
+  bool offRoute = false;
+
+  /// Why the last attempt to find a new route failed (shown on screen).
+  String? rerouteError;
+  bool _saidRerouting = false;
   DateTime _lastReroute = DateTime.fromMillisecondsSinceEpoch(0);
   final Set<String> _spoken = {};
 
@@ -68,6 +75,10 @@ class NavEngine extends ChangeNotifier {
     arrived = false;
     rerouting = false;
     _offCount = 0;
+    offRoute = false;
+    rerouteError = null;
+    _saidRerouting = false;
+    snapped = null;
     _spoken.clear();
     notifyListeners();
   }
@@ -94,21 +105,34 @@ class NavEngine extends ChangeNotifier {
 
     if (s.offRouteM > 50) {
       _offCount++;
+      if (_offCount >= 3) {
+        offRoute = true;
+        snapped = null; // follow your real position, not the old route
+      }
       if (_offCount >= 3 &&
           !rerouting &&
-          DateTime.now().difference(_lastReroute).inSeconds > 15) {
+          DateTime.now().difference(_lastReroute).inSeconds >= 10) {
         _lastReroute = DateTime.now();
         rerouting = true;
-        notifyListeners();
-        voice.sayRerouting();
+        // Say it once per detour, not on every new attempt.
+        if (!_saidRerouting) {
+          _saidRerouting = true;
+          voice.sayRerouting();
+        }
         onOffRoute(p, heading).whenComplete(() {
           rerouting = false;
           notifyListeners();
         });
       }
+      notifyListeners();
       return;
     }
     _offCount = 0;
+    if (offRoute) {
+      offRoute = false;
+      _saidRerouting = false;
+      rerouteError = null;
+    }
 
     _seg = s.segment;
     final segLen = r.cum[s.segment + 1] - r.cum[s.segment];
