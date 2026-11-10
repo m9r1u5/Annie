@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -24,6 +26,59 @@ class _PlacesScreenState extends State<PlacesScreen> {
   bool _loading = false;
   List<FoundPlace> _results = [];
   String? _error;
+
+  // Search box
+  final _ctrl = TextEditingController();
+  Timer? _debounce;
+  bool _searchingName = false;
+  List<FoundPlace> _nameResults = [];
+  String _nameQuery = '';
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onType(String v) {
+    setState(() {}); // filter the list straight away
+    _debounce?.cancel();
+    final q = v.trim();
+    if (q.length < 2) {
+      setState(() {
+        _nameResults = [];
+        _nameQuery = '';
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 500), () => _searchName(q));
+  }
+
+  /// Searches every business by name ("Mica"), not just this category.
+  Future<void> _searchName(String q) async {
+    setState(() => _searchingName = true);
+    final r = await Services.i.places.byName(q, widget.here, route: _along ? widget.route : const []);
+    if (!mounted || _ctrl.text.trim() != q) return;
+    setState(() {
+      _nameResults = r;
+      _nameQuery = q;
+      _searchingName = false;
+    });
+  }
+
+  /// Category results matching what you typed, then other places with that name.
+  List<FoundPlace> get _shown {
+    final q = _ctrl.text.trim().toLowerCase();
+    if (q.isEmpty) return _results;
+    bool hit(FoundPlace p) => p.name.toLowerCase().contains(q) || p.address.toLowerCase().contains(q);
+    final mine = _results.where(hit).toList();
+    final seen = mine.map((p) => '${p.name}|${p.point.lat.toStringAsFixed(4)}').toSet();
+    final more = _nameQuery.toLowerCase() == q
+        ? _nameResults.where((p) => seen.add('${p.name}|${p.point.lat.toStringAsFixed(4)}')).toList()
+        : <FoundPlace>[];
+    return [...mine, ...more];
+  }
 
   @override
   void initState() {
@@ -82,10 +137,38 @@ class _PlacesScreenState extends State<PlacesScreen> {
                 onSelectionChanged: (v) {
                   setState(() => _along = v.first);
                   if (_cat != null) _pick(_cat!);
+                  if (_ctrl.text.trim().length >= 2) _searchName(_ctrl.text.trim());
                 },
               ),
             ),
-          Expanded(child: cat == null ? _grid() : _list()),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: TextField(
+              controller: _ctrl,
+              onChanged: _onType,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (v) {
+                if (v.trim().length >= 2) _searchName(v.trim());
+              },
+              decoration: InputDecoration(
+                hintText: cat == null ? 'Search any shop or place by name' : 'Search ${cat.label.toLowerCase()} by name',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _ctrl.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _ctrl.clear();
+                          _onType('');
+                        },
+                      ),
+                filled: true,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(28), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              ),
+            ),
+          ),
+          Expanded(child: cat == null && _ctrl.text.trim().isEmpty ? _grid() : _list()),
         ]),
       ),
     );
@@ -97,6 +180,7 @@ class _PlacesScreenState extends State<PlacesScreen> {
       padding: const EdgeInsets.all(12),
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
+      childAspectRatio: 0.85,
       children: [
         for (final c in placeCategories)
           Material(
@@ -112,9 +196,14 @@ class _PlacesScreenState extends State<PlacesScreen> {
                   child: Icon(c.icon, color: Colors.white, size: 28),
                 ),
                 const SizedBox(height: 8),
-                Text(c.label,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(c.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, height: 1.1)),
+                ),
               ]),
             ),
           ),
@@ -123,10 +212,19 @@ class _PlacesScreenState extends State<PlacesScreen> {
   }
 
   Widget _list() {
-    final cat = _cat!;
+    final cat = _cat;
     final cs = Theme.of(context).colorScheme;
     if (_loading) return const Center(child: CircularProgressIndicator());
+    final shown = _shown;
+    final typed = _ctrl.text.trim();
     return ListView(children: [
+      if (_searchingName) const LinearProgressIndicator(),
+      if (typed.isNotEmpty && shown.isEmpty && !_searchingName && typed.length >= 2)
+        Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('Nothing called "$typed" found${_along ? ' along your route' : ' nearby'}.',
+              textAlign: TextAlign.center),
+        ),
       if (Services.i.places.lastWasOffline && _results.isNotEmpty)
         const ListTile(
           dense: true,
@@ -139,11 +237,13 @@ class _PlacesScreenState extends State<PlacesScreen> {
           leading: Icon(Icons.info_outline),
           title: Text('Add your TomTom key in Settings for more places, opening hours and phone numbers.'),
         ),
-      if (_error != null)
+      if (_error != null && typed.isEmpty)
         Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)),
-      for (final p in _results)
+      for (final p in shown)
         ListTile(
-          leading: CircleAvatar(backgroundColor: cat.color, child: Icon(cat.icon, color: Colors.white)),
+          leading: CircleAvatar(
+              backgroundColor: cat != null && _results.contains(p) ? cat.color : cs.primary,
+              child: Icon(cat != null && _results.contains(p) ? cat.icon : Icons.storefront, color: Colors.white)),
           title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

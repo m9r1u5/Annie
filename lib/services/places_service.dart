@@ -99,6 +99,76 @@ class PlacesService {
     return _offlineNear(c, here);
   }
 
+  /// Any business or place by name ("Mica", "Engen"), near you or along your route.
+  Future<List<FoundPlace>> byName(String text, GeoPoint here, {List<GeoPoint> route = const []}) async {
+    final q = text.trim();
+    if (q.length < 2) return const [];
+    if (_key.isNotEmpty) {
+      try {
+        http.Response r;
+        if (route.length >= 2) {
+          final uri = Uri.parse('https://api.tomtom.com/search/2/searchAlongRoute/${Uri.encodeComponent(q)}.json')
+              .replace(queryParameters: {
+            'key': _key,
+            'maxDetourTime': '1200',
+            'limit': '20',
+            'openingHours': 'nextSevenDays',
+            'sortBy': 'detourOffset',
+            'detourOffset': 'true',
+          });
+          r = await http
+              .post(uri,
+                  headers: {'Content-Type': 'application/json', 'User-Agent': AppConfig.userAgent},
+                  body: jsonEncode({
+                    'route': {'points': _thin(route, 400).map((p) => {'lat': p.lat, 'lon': p.lon}).toList()},
+                  }))
+              .timeout(const Duration(seconds: 10));
+        } else {
+          final uri = Uri.parse('https://api.tomtom.com/search/2/poiSearch/${Uri.encodeComponent(q)}.json')
+              .replace(queryParameters: {
+            'key': _key,
+            'lat': '${here.lat}',
+            'lon': '${here.lon}',
+            'radius': '40000',
+            'limit': '30',
+            'countrySet': 'ZA',
+            'typeahead': 'true',
+            'openingHours': 'nextSevenDays',
+          });
+          r = await http.get(uri, headers: {'User-Agent': AppConfig.userAgent}).timeout(const Duration(seconds: 8));
+        }
+        if (r.statusCode == 200) {
+          final out = _parse(r.body, here);
+          if (route.length < 2) out.sort((a, b) => (a.distanceM ?? 1e9).compareTo(b.distanceM ?? 1e9));
+          lastWasOffline = false;
+          return out;
+        }
+      } catch (_) {}
+    }
+    // Offline: match names in your downloaded search data, nearest first.
+    lastWasOffline = true;
+    final words = q
+        .toLowerCase()
+        .replaceAll(RegExp(r"[^\p{L}\p{N}\s]", unicode: true), ' ')
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty);
+    final match = words.map((w) => '$w*').join(' ');
+    if (match.isEmpty) return const [];
+    final out = <FoundPlace>[];
+    for (final path in await offlineDbs()) {
+      try {
+        final db = await OfflineSearchCache.open(path);
+        final rows = await db.rawQuery(
+            "SELECT name, context, kind, lat, lon FROM s WHERE s MATCH ? AND kind NOT IN ('street','address') LIMIT 400",
+            [match]);
+        out.addAll(rows.map((r) => _fromRow(r, here)));
+      } catch (_) {}
+    }
+    out.removeWhere((p) => (p.distanceM ?? 0) > 60000);
+    out.sort((a, b) => a.distanceM!.compareTo(b.distanceM!));
+    return out.take(30).toList();
+  }
+
   /// Places near the rest of your route, ordered by how far ahead they are.
   Future<List<FoundPlace>> alongRoute(PlaceCategory c, List<GeoPoint> route, GeoPoint here) async {
     if (route.length < 2) return nearby(c, here);
