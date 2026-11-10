@@ -39,7 +39,20 @@ class SearchService {
   /// True if the last results came from the offline databases.
   bool lastWasOffline = false;
 
+  /// Your TomTom key (set at start-up): business names like TomTom's own search.
+  String Function()? tomtomKey;
+
   Future<List<Place>> search(String query, {GeoPoint? near}) async {
+    final key = tomtomKey?.call().trim() ?? '';
+    if (key.isNotEmpty && query.trim().length >= 3) {
+      try {
+        final r = await _tomtom(query, key, near);
+        if (r.isNotEmpty) {
+          lastWasOffline = false;
+          return r;
+        }
+      } catch (_) {}
+    }
     try {
       final r = await _online(query, near: near);
       lastWasOffline = false;
@@ -50,6 +63,38 @@ class SearchService {
       lastWasOffline = true;
       return _offline(query, dbs, near);
     }
+  }
+
+  Future<List<Place>> _tomtom(String query, String key, GeoPoint? near) async {
+    final params = <String, String>{
+      'key': key,
+      'countrySet': 'ZA',
+      'limit': '15',
+      'typeahead': 'true',
+      'language': 'en-GB',
+    };
+    if (near != null) {
+      params['lat'] = near.lat.toStringAsFixed(5);
+      params['lon'] = near.lon.toStringAsFixed(5);
+    }
+    final uri = Uri.parse('https://api.tomtom.com/search/2/search/${Uri.encodeComponent(query.trim())}.json')
+        .replace(queryParameters: params);
+    final res = await http.get(uri, headers: {'User-Agent': AppConfig.userAgent}).timeout(const Duration(seconds: 6));
+    if (res.statusCode != 200) throw Exception('TomTom search ${res.statusCode}');
+    final out = <Place>[];
+    for (final raw in ((jsonDecode(res.body) as Map<String, dynamic>)['results'] as List?) ?? const []) {
+      final r = raw as Map<String, dynamic>;
+      final pos = r['position'] as Map?;
+      if (pos == null) continue;
+      final addr = (r['address'] as Map?) ?? const {};
+      final poi = r['poi'] as Map?;
+      final free = addr['freeformAddress'] as String? ?? '';
+      final name = (poi?['name'] as String?) ??
+          (r['type'] == 'Geography' ? (addr['municipality'] as String? ?? free) : free);
+      out.add(Place(name, name == free ? (addr['municipality'] as String? ?? '') : free,
+          (pos['lat'] as num).toDouble(), (pos['lon'] as num).toDouble()));
+    }
+    return out;
   }
 
   Future<List<Place>> _offline(String query, List<String> dbs, GeoPoint? near) async {

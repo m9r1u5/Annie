@@ -17,6 +17,7 @@ import '../services/voice_service.dart';
 import '../utils/geo.dart';
 import 'favourites_screen.dart';
 import 'maps_screen.dart';
+import 'places_screen.dart';
 import 'search_screen.dart';
 import 'settings_screen.dart';
 import 'zones_screen.dart';
@@ -980,6 +981,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// While driving: find a place along your route and go there instead.
+  Future<void> _findWhileDriving() async {
+    final here = _here;
+    if (here == null) return;
+    final place = await Navigator.push<Place>(
+      context,
+      MaterialPageRoute(builder: (_) => PlacesScreen(here: here, route: _nav.remainingPath())),
+    );
+    if (place == null || !mounted) return;
+    _nav.stop();
+    _trafficTimer?.cancel();
+    await _routeTo(place);
+    if (mounted && _route != null && _mode == Mode.preview) _startDriving();
+  }
+
   // ---------------- Retrace your trail ----------------
 
   String _ago(DateTime t) {
@@ -1413,6 +1429,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bottom: 150 + MediaQuery.of(context).padding.bottom,
         child: Column(children: [
           if (!_retracing) ...[
+            _roundButton(Icons.search, _findWhileDriving, tooltip: 'Find fuel, food, police…'),
+            const SizedBox(height: 12),
             _roundButton(Icons.history, _showRetrace, tooltip: 'Retrace my trail', color: const Color(0xFFFF7043)),
             const SizedBox(height: 12),
           ],

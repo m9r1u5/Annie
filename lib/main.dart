@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'config.dart';
 import 'screens/home_screen.dart';
 import 'services/map_pack_service.dart';
+import 'services/places_service.dart';
 import 'services/routing_service.dart';
 import 'services/search_service.dart';
 import 'services/settings.dart';
@@ -23,6 +24,7 @@ class Services {
         voice = VoiceService(settings),
         updates = UpdateService() {
     styles = StyleBuilder(packs);
+    places = PlacesService(settings, packs.installedSearchDbs);
   }
 
   static late Services i;
@@ -33,6 +35,7 @@ class Services {
   final SearchService search;
   final TrafficService traffic;
   final TrailService trail;
+  late final PlacesService places;
   final VoiceService voice;
   final UpdateService updates;
   late final StyleBuilder styles;
@@ -43,6 +46,7 @@ class Services {
     i = Services._(s);
     i.routing.packs = i.packs;
     i.search.offlineDbs = i.packs.installedSearchDbs;
+    i.search.tomtomKey = () => s.tomtomKey;
     await i.packs.refreshParts();
     await i.trail.load();
     await i.voice.init();

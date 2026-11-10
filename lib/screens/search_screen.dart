@@ -6,6 +6,8 @@ import '../main.dart';
 import '../services/settings.dart';
 import '../utils/geo.dart';
 import 'favourites_screen.dart';
+import 'places_screen.dart';
+import '../services/places_service.dart';
 
 /// Search for an address or place. Returns the chosen [Place].
 class SearchScreen extends StatefulWidget {
@@ -97,6 +99,43 @@ class _SearchScreenState extends State<SearchScreen> {
     );
   }
 
+  Future<void> _openCategory(PlaceCategory? c) async {
+    final here = widget.near;
+    if (here == null) return;
+    final place = await Navigator.push<Place>(
+      context,
+      MaterialPageRoute(builder: (_) => PlacesScreen(here: here, category: c)),
+    );
+    if (place != null && mounted) Navigator.pop(context, place);
+  }
+
+  /// Quick buttons: Fuel, Shops, Hospital, Police, ... and "More".
+  Widget _categoryRow() {
+    return SizedBox(
+      height: 56,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        children: [
+          for (final c in placeCategories.take(6))
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ActionChip(
+                avatar: Icon(c.icon, color: c.color, size: 20),
+                label: Text(c.label),
+                onPressed: () => _openCategory(c),
+              ),
+            ),
+          ActionChip(
+            avatar: const Icon(Icons.apps, size: 20),
+            label: const Text('More'),
+            onPressed: () => _openCategory(null),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final st = Services.i.settings;
@@ -135,6 +174,7 @@ class _SearchScreenState extends State<SearchScreen> {
         children: [
           if (_loading) const LinearProgressIndicator(),
           if (coord != null) _tile(coord, Icons.pin_drop),
+          if (showSaved && widget.near != null) _categoryRow(),
           if (showSaved) ...[
             if (st.home != null) _tile(st.home!, Icons.home),
             if (st.work != null) _tile(st.work!, Icons.work),

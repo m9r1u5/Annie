@@ -34,6 +34,10 @@ intents = """
         <intent>
             <action android:name="android.intent.action.SEND"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
         </intent>"""
 if "TTS_SERVICE" not in xml:
     if "<queries>" in xml:
