@@ -242,6 +242,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _drawRoute();
       _fitRoute(r);
       _previewTraffic(r);
+      _loadLanes(r);
     } catch (e) {
       _toast(e.toString());
       _cancel();
@@ -267,6 +268,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _nav.setRoute(r);
       await _drawRoute();
       _drivingTraffic();
+      _loadLanes(r);
     } catch (e) {
       // Keep the old route; another attempt follows in 10 seconds.
       _nav.rerouteError = e.toString().replaceFirst('Exception: ', '');
@@ -323,6 +325,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _route = r;
         _traffic = TrafficCheck(alt.timeS, 0, null);
       });
+      _loadLanes(r);
       if (driving) {
         _nav.setRoute(r);
         _nav.trafficFactor = r.totalS > 0 ? alt.timeS / r.totalS : 1.0;
@@ -536,6 +539,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _last3dSwitch = now;
     setState(() => _is3d = town!);
     _apply3dBuildings();
+  }
+
+  Future<void> _loadLanes(RouteResult r) async {
+    final lanes = await s.routing.fetchLanes(r);
+    if (!mounted) return;
+    r.lanes = lanes;
+    setState(() {});
+  }
+
+  /// Lanes for the next junction ahead that has lane markings.
+  LanePoint? _nextLanes() {
+    final r = _nav.route;
+    if (r == null || r.lanes.isEmpty || _nav.offRoute) return null;
+    final window = _nav.speedKmh > 70 ? 1500.0 : 500.0;
+    for (final lp in r.lanes) {
+      final ahead = lp.alongM - _nav.progressM;
+      if (ahead < -10) continue;
+      if (ahead > window) return null;
+      return lp;
+    }
+    return null;
+  }
+
+  static IconData _laneIcon(String arrow) {
+    switch (arrow) {
+      case 'slight right':
+        return Icons.turn_slight_right;
+      case 'right':
+        return Icons.turn_right;
+      case 'sharp right':
+        return Icons.turn_sharp_right;
+      case 'slight left':
+        return Icons.turn_slight_left;
+      case 'left':
+        return Icons.turn_left;
+      case 'sharp left':
+        return Icons.turn_sharp_left;
+      case 'uturn':
+        return Icons.u_turn_right;
+      default:
+        return Icons.straight;
+    }
+  }
+
+  Widget _laneRow(LanePoint lp) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final lane in lp.lanes)
+              Container(
+                width: 44,
+                height: 50,
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: lane.good ? Colors.white : Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (final a in lane.arrows.take(2))
+                      Icon(_laneIcon(a),
+                          size: lane.arrows.length > 1 ? 20 : 30,
+                          color: lane.good ? Brand.tealDark : Colors.white54),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// "Accident ahead · 1.2 km" for the next incident within 5 km.
@@ -1062,7 +1139,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           elevation: 6,
           child: Padding(
             padding: const EdgeInsets.all(14),
-            child: Row(children: [
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
               Icon(_nav.offRoute ? Icons.wrong_location : VoiceService.iconFor(m), color: Colors.white, size: 56),
               const SizedBox(width: 14),
               Expanded(
@@ -1081,12 +1159,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ]),
               ),
             ]),
+            if (_nextLanes() != null) _laneRow(_nextLanes()!),
+            ]),
           ),
         ),
       ),
       if (!_nav.rerouting && !_nav.offRoute && (_nav.route?.passesZones ?? false))
         Positioned(
-          top: top + 120,
+          top: top + (_nextLanes() != null ? 180 : 120),
           left: 0,
           right: 0,
           child: Center(
@@ -1100,7 +1180,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       if (_nextIncidentText() != null)
         Positioned(
-          top: top + 170,
+          top: top + (_nextLanes() != null ? 230 : 170),
           left: 0,
           right: 0,
           child: Center(
@@ -1114,7 +1194,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       if (!_nav.rerouting && _nav.offRoute && _nav.rerouteError != null)
         Positioned(
-          top: top + 120,
+          top: top + (_nextLanes() != null ? 180 : 120),
           left: 16,
           right: 16,
           child: Center(
@@ -1135,7 +1215,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       if (_nav.rerouting)
         Positioned(
-          top: top + 120,
+          top: top + (_nextLanes() != null ? 180 : 120),
           left: 0,
           right: 0,
           child: Center(

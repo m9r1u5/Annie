@@ -49,8 +49,31 @@ class RouteResult {
   /// True if this route was planned on the phone (no internet needed).
   bool plannedOffline = false;
 
+  /// The request that produced this route (used to fetch lane guidance).
+  Map<String, dynamic>? request;
+
+  /// Lane guidance along the route (filled in by [RoutingService.fetchLanes]).
+  List<LanePoint> lanes = const [];
+
   RouteResult(this.points, this.maneuvers, this.totalM, this.totalS)
       : cum = cumulativeDistances(points);
+}
+
+/// One lane at a junction: its arrows and whether it's a good lane for your route.
+class Lane {
+  final List<String> arrows; // e.g. ["left", "straight"]
+  final bool good;
+  const Lane(this.arrows, this.good);
+}
+
+/// Lane guidance at a point on the route.
+class LanePoint {
+  final double alongM; // distance from the start of the route
+  final List<Lane> lanes;
+  const LanePoint(this.alongM, this.lanes);
+
+  /// Only worth showing when some lanes are wrong for your route.
+  bool get matters => lanes.any((l) => !l.good) && lanes.any((l) => l.good);
 }
 
 class RoutingException implements Exception {
@@ -93,7 +116,9 @@ class RoutingService {
     RouteResult? result;
     if (excludable.isNotEmpty) {
       try {
-        result = _parse(await _post(_body(from, to, headingDeg, exclude: excludable)));
+        final body = _body(from, to, headingDeg, exclude: excludable);
+        result = _parse(await _post(body));
+        result.request = body;
       } on RoutingException catch (e) {
         if (e.offline) rethrow;
         // Could not avoid every zone (or the zones are too big for the
@@ -102,8 +127,9 @@ class RoutingService {
       }
     }
     if (result == null) {
-      final j = await _post(_body(from, to, headingDeg, alternates: zones.isEmpty ? 0 : 2));
-      final options = <RouteResult>[_parse(j)];
+      final body = _body(from, to, headingDeg, alternates: zones.isEmpty ? 0 : 2);
+      final j = await _post(body);
+      final options = <RouteResult>[_parse(j)..request = (Map.of(body)..remove('alternates'))];
       for (final alt in (j['alternates'] as List?) ?? const []) {
         try {
           options.add(_parse(alt as Map<String, dynamic>));
@@ -160,7 +186,9 @@ class RoutingService {
     }
     locations.add({'lat': path.last.lat, 'lon': path.last.lon});
     try {
-      final r = _parse(await _post(_body(path.first, path.last, headingDeg, locations: locations)));
+      final body = _body(path.first, path.last, headingDeg, locations: locations);
+      final r = _parse(await _post(body));
+      r.request = body;
       // Must be close to the path we asked for (within 15% length).
       if ((r.totalM - total).abs() > total * 0.15 + 300) return null;
       final zones = settings.activeZones();
@@ -169,6 +197,47 @@ class RoutingService {
       return r;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Lane guidance for [r] from OpenStreetMap lane data (asks the router
+  /// again in its "osrm" format, which includes lanes). Empty if none.
+  Future<List<LanePoint>> fetchLanes(RouteResult r) async {
+    final req = r.request;
+    if (req == null || r.points.length < 2) return const [];
+    try {
+      final j = await _post({...req, 'format': 'osrm'});
+      final out = <LanePoint>[];
+      for (final route in ((j['routes'] as List?) ?? const []).take(1)) {
+        for (final leg in ((route as Map)['legs'] as List? ?? const [])) {
+          for (final step in ((leg as Map)['steps'] as List? ?? const [])) {
+            for (final x in ((step as Map)['intersections'] as List? ?? const [])) {
+              final lanes = (x as Map)['lanes'] as List?;
+              final loc = x['location'] as List?;
+              if (lanes == null || lanes.length < 2 || loc == null) continue;
+              final p = GeoPoint((loc[1] as num).toDouble(), (loc[0] as num).toDouble());
+              final sn = snapToLine(r.points, p);
+              if (sn.offRouteM > 25) continue; // not on this route
+              final segLen = r.cum[sn.segment + 1] - r.cum[sn.segment];
+              final lp = LanePoint(
+                r.cum[sn.segment] + segLen * sn.fraction,
+                lanes.map((l) {
+                  final m = l as Map;
+                  final arrows = ((m['indications'] as List?) ?? const ['straight'])
+                      .map((e) => e.toString())
+                      .toList();
+                  return Lane(arrows, m['valid'] == true);
+                }).toList(),
+              );
+              if (lp.matters) out.add(lp);
+            }
+          }
+        }
+      }
+      out.sort((a, b) => a.alongM.compareTo(b.alongM));
+      return out;
+    } catch (_) {
+      return const [];
     }
   }
 
