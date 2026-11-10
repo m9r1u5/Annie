@@ -60,6 +60,63 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _editKey() async {
+    final ctrl = TextEditingController(text: s.settings.tomtomKey);
+    var testing = false;
+    String? result;
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (c) => StatefulBuilder(
+        builder: (c, setD) => AlertDialog(
+          title: const Text('TomTom API key'),
+          content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Sign in at developer.tomtom.com, open Dashboard › API Keys, copy your key and paste it here.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: const InputDecoration(labelText: 'API key', border: OutlineInputBorder()),
+            ),
+            if (testing) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator()),
+            if (result != null)
+              Padding(padding: const EdgeInsets.only(top: 12), child: Text(result!)),
+          ]),
+          actions: [
+            if (s.settings.hasTraffic)
+              TextButton(onPressed: () => Navigator.pop(c, ''), child: const Text('Remove')),
+            TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: testing
+                  ? null
+                  : () async {
+                      final k = ctrl.text.trim();
+                      if (k.isEmpty) return;
+                      setD(() {
+                        testing = true;
+                        result = null;
+                      });
+                      final err = await s.traffic.testKey(k);
+                      if (err == null) {
+                        if (c.mounted) Navigator.pop(c, k);
+                      } else {
+                        setD(() {
+                          testing = false;
+                          result = err;
+                        });
+                      }
+                    },
+              child: const Text('Test & save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == null) return;
+    _set((x) => x.tomtomKey = saved);
+    _toast(saved.isEmpty ? 'Key removed. Live traffic is off.' : 'Key works. Live traffic is on.');
+  }
+
   void _toast(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
@@ -137,6 +194,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
             await Navigator.push(context, MaterialPageRoute(builder: (_) => const ZonesScreen()));
             if (mounted) setState(() {});
           },
+        ),
+        _header('Live traffic (TomTom)'),
+        ListTile(
+          leading: const Icon(Icons.traffic),
+          title: const Text('TomTom API key'),
+          subtitle: Text(st.hasTraffic
+              ? 'Key saved (…${st.tomtomKey.trim().substring((st.tomtomKey.trim().length - 4).clamp(0, 999))}). Tap to change.'
+              : 'Not set. Tap to paste your free key from developer.tomtom.com'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _editKey,
+        ),
+        SwitchListTile(
+          title: const Text('Show traffic on the map'),
+          subtitle: const Text('Green = flowing, orange = slow, red = jam, purple = closed. '
+              'Works on downloaded maps.'),
+          value: st.showTraffic,
+          onChanged: st.hasTraffic ? (v) => _set((x) => x.showTraffic = v) : null,
+        ),
+        SwitchListTile(
+          title: const Text('Switch to faster routes automatically'),
+          subtitle: const Text('While driving, traffic is checked every 4 minutes. '
+              'A faster route is only used if it also avoids your zones.'),
+          value: st.autoFaster,
+          onChanged: st.hasTraffic ? (v) => _set((x) => x.autoFaster = v) : null,
         ),
         _header('Display'),
         ListTile(

@@ -46,6 +46,9 @@ class Settings extends ChangeNotifier {
   List<AvoidZone> zones = [];
   bool avoidZones = true;
   bool nightStricter = true;
+  String tomtomKey = '';
+  bool showTraffic = true;
+  bool autoFaster = true;
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -78,6 +81,9 @@ class Settings extends ChangeNotifier {
     }
     avoidZones = _p.getBool('avoidZones') ?? true;
     nightStricter = _p.getBool('nightStricter') ?? true;
+    tomtomKey = _p.getString('tomtomKey') ?? '';
+    showTraffic = _p.getBool('showTraffic') ?? true;
+    autoFaster = _p.getBool('autoFaster') ?? true;
     final f = _p.getString('favourites');
     if (f != null) {
       favourites = (jsonDecode(f) as List)
@@ -124,6 +130,9 @@ class Settings extends ChangeNotifier {
     _p.setString('zones', jsonEncode(zones.map((e) => e.toJson()).toList()));
     _p.setBool('avoidZones', avoidZones);
     _p.setBool('nightStricter', nightStricter);
+    _p.setString('tomtomKey', tomtomKey);
+    _p.setBool('showTraffic', showTraffic);
+    _p.setBool('autoFaster', autoFaster);
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }
@@ -142,6 +151,8 @@ class Settings extends ChangeNotifier {
       if (s.recents.length > 15) s.recents = s.recents.sublist(0, 15);
     });
   }
+
+  bool get hasTraffic => tomtomKey.trim().isNotEmpty;
 
   /// After dark: 18:30 to 05:30.
   static bool get isAfterDark {

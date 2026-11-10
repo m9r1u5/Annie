@@ -65,6 +65,7 @@ PHRASES = {
     "straight": "gaan reguit aan.",
     "reroute": "Roete word herbereken.",
     "selected": "Afrikaanse stem gekies.",
+    "faster": "Vinniger roete gevind.",
 }
 
 # Trim silence at both ends so joined phrases flow naturally.

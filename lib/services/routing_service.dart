@@ -116,18 +116,64 @@ class RoutingService {
     return result;
   }
 
+  /// Turn-by-turn route that follows [path] (e.g. TomTom's faster route).
+  /// Returns null if the result doesn't match the path well enough.
+  Future<RouteResult?> routeAlong(List<GeoPoint> path, {double? headingDeg}) async {
+    if (path.length < 2) return null;
+    final cum = cumulativeDistances(path);
+    final total = cum.last;
+    final locations = <Map<String, dynamic>>[];
+    final start = <String, dynamic>{'lat': path.first.lat, 'lon': path.first.lon};
+    if (headingDeg != null) {
+      start['heading'] = headingDeg.round();
+      start['heading_tolerance'] = 45;
+    }
+    locations.add(start);
+    // A point every ~5 km (at most 12), skipping the first and last 500 m.
+    final count = (total / 5000).floor().clamp(1, 12);
+    var j = 0;
+    for (var k = 1; k <= count; k++) {
+      final target = total * k / (count + 1);
+      if (target < 500 || total - target < 500) continue;
+      while (j < cum.length - 2 && cum[j + 1] < target) {
+        j++;
+      }
+      final a = path[j], b = path[j + 1];
+      locations.add({
+        'lat': a.lat,
+        'lon': a.lon,
+        'type': 'through',
+        'heading': bearingDeg(a, b).round(),
+        'heading_tolerance': 45,
+      });
+    }
+    locations.add({'lat': path.last.lat, 'lon': path.last.lon});
+    try {
+      final r = _parse(await _post(_body(path.first, path.last, headingDeg, locations: locations)));
+      // Must be close to the path we asked for (within 15% length).
+      if ((r.totalM - total).abs() > total * 0.15 + 300) return null;
+      final zones = settings.activeZones();
+      r.hits = findZoneHits(r.points, zones);
+      if (r.hits.isNotEmpty) return null;
+      return r;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Map<String, dynamic> _body(GeoPoint from, GeoPoint to, double? headingDeg,
-      {List<ActiveZone> exclude = const [], int alternates = 0}) {
+      {List<ActiveZone> exclude = const [], int alternates = 0, List<Map<String, dynamic>>? locations}) {
     final start = <String, dynamic>{'lat': from.lat, 'lon': from.lon};
     if (headingDeg != null) {
       start['heading'] = headingDeg.round();
       start['heading_tolerance'] = 45;
     }
     final body = <String, dynamic>{
-      'locations': [
-        start,
-        {'lat': to.lat, 'lon': to.lon},
-      ],
+      'locations': locations ??
+          [
+            start,
+            {'lat': to.lat, 'lon': to.lon},
+          ],
       'costing': 'auto',
       'costing_options': {
         'auto': {

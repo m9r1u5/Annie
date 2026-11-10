@@ -7,6 +7,7 @@ import 'services/routing_service.dart';
 import 'services/search_service.dart';
 import 'services/settings.dart';
 import 'services/style_builder.dart';
+import 'services/traffic_service.dart';
 import 'services/update_service.dart';
 import 'services/voice_service.dart';
 
@@ -16,6 +17,7 @@ class Services {
       : packs = MapPackService(settings),
         routing = RoutingService(settings),
         search = SearchService(),
+        traffic = TrafficService(settings),
         voice = VoiceService(settings),
         updates = UpdateService() {
     styles = StyleBuilder(packs);
@@ -27,6 +29,7 @@ class Services {
   final MapPackService packs;
   final RoutingService routing;
   final SearchService search;
+  final TrafficService traffic;
   final VoiceService voice;
   final UpdateService updates;
   late final StyleBuilder styles;

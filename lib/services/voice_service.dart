@@ -270,6 +270,9 @@ class VoiceService {
 
   Future<void> sayStarted() => _speak(started(), ['start']);
 
+  Future<void> sayFaster() =>
+      _speak(lang == 'af' ? 'Vinniger roete gevind.' : 'Faster route found.', ['faster']);
+
   Future<void> sayLanguageSelected() => _speak(
       lang == 'af' ? 'Afrikaans stem gekies.' : 'English voice selected.', ['selected']);
 

@@ -12,6 +12,7 @@ import '../services/nav_engine.dart';
 import '../services/routing_service.dart';
 import '../services/settings.dart';
 import '../services/style_builder.dart';
+import '../services/traffic_service.dart';
 import '../services/voice_service.dart';
 import '../utils/geo.dart';
 import 'favourites_screen.dart';
@@ -47,6 +48,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _is3d = false;
   bool _follow = true;
   Timer? _themeTimer;
+
+  // Live traffic
+  TrafficCheck? _traffic;
+  List<Incident> _incidents = [];
+  Timer? _trafficTimer;
+  bool _checkingTraffic = false;
+  bool _switching = false;
   bool _arrivedShown = false;
 
   late final NavEngine _nav = NavEngine(voice: s.voice, onOffRoute: _reroute);
@@ -74,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _posSub?.cancel();
     _wifiSub?.cancel();
     _themeTimer?.cancel();
+    _trafficTimer?.cancel();
     _nav.removeListener(_onNav);
     s.settings.removeListener(_onSettings);
     WakelockPlus.disable();
@@ -84,7 +93,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _buildStyle() async {
     final want3d = _is3d;
-    final built = await s.styles.build(night: _styleNight, show3d: want3d);
+    final built = await s.styles.build(
+        night: _styleNight,
+        show3d: want3d,
+        trafficKey: s.settings.showTraffic ? s.settings.tomtomKey : null);
     if (!mounted) return;
     _styleBuilt3d = want3d;
     final changed = _style?.styleString != built.styleString;
@@ -212,9 +224,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final r = await s.routing.route(from, place.point,
           headingDeg: (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null);
       if (!mounted) return;
-      setState(() => _route = r);
+      setState(() {
+        _route = r;
+        _traffic = null;
+        _incidents = [];
+      });
       await _drawRoute();
       _fitRoute(r);
+      _previewTraffic(r);
     } catch (e) {
       _toast(e.toString());
       _cancel();
@@ -232,9 +249,100 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _route = r;
       _nav.setRoute(r);
       await _drawRoute();
+      _drivingTraffic();
     } catch (_) {
       // Keep the old route; another attempt follows after 15 seconds.
     }
+  }
+
+  // ---------------- Live traffic ----------------
+
+  Future<void> _previewTraffic(RouteResult r) async {
+    if (!s.settings.hasTraffic) return;
+    setState(() => _checkingTraffic = true);
+    final results = await Future.wait<Object?>([
+      s.traffic.check(r.points),
+      _loadIncidents(r.points),
+    ]);
+    if (!mounted || _route != r) return;
+    setState(() {
+      _traffic = results[0] as TrafficCheck?;
+      _checkingTraffic = false;
+    });
+    await _drawRoute();
+  }
+
+  Future<void> _loadIncidents(List<GeoPoint> pts) async {
+    if (pts.isEmpty) return;
+    double w = 180, s0 = 90, e = -180, n = -90;
+    for (final p in pts) {
+      if (p.lon < w) w = p.lon;
+      if (p.lon > e) e = p.lon;
+      if (p.lat < s0) s0 = p.lat;
+      if (p.lat > n) n = p.lat;
+    }
+    const pad = 0.02;
+    final list = await s.traffic.incidents(w - pad, s0 - pad, e + pad, n + pad, pts.first);
+    // Keep only incidents on (or right next to) the route.
+    _incidents = list.where((i) => snapToLine(pts, i.point).offRouteM < 60).toList();
+  }
+
+  /// Use TomTom's faster route (turned into turn-by-turn directions).
+  Future<bool> _useFaster({required bool driving}) async {
+    final alt = _traffic?.faster;
+    if (alt == null || _switching) return false;
+    _switching = true;
+    try {
+      final heading = driving ? _nav.heading : ((_pos?.heading ?? -1) >= 0 ? _pos!.heading : null);
+      final path = driving ? [_nav.snapped ?? _here ?? alt.points.first, ...alt.points.skip(1)] : alt.points;
+      final r = await s.routing.routeAlong(path, headingDeg: heading);
+      if (!mounted || r == null) return false;
+      if (driving && _mode != Mode.driving) return false;
+      final saved = _traffic!.savingS;
+      setState(() {
+        _route = r;
+        _traffic = TrafficCheck(alt.timeS, 0, null);
+      });
+      if (driving) {
+        _nav.setRoute(r);
+        _nav.trafficFactor = r.totalS > 0 ? alt.timeS / r.totalS : 1.0;
+        s.voice.sayFaster();
+        _toast('Faster route: saves ${formatDuration(saved)}.');
+      }
+      await _drawRoute();
+      return true;
+    } finally {
+      _switching = false;
+    }
+  }
+
+  /// While driving: check traffic every 4 minutes.
+  void _startTrafficTimer() {
+    _trafficTimer?.cancel();
+    if (!s.settings.hasTraffic) return;
+    _trafficTimer = Timer.periodic(const Duration(minutes: 4), (_) => _drivingTraffic());
+  }
+
+  Future<void> _drivingTraffic() async {
+    if (!s.settings.hasTraffic || _mode != Mode.driving || _nav.remainingM < 2000) return;
+    final path = _nav.remainingPath();
+    final results = await Future.wait<Object?>([
+      s.traffic.check(path),
+      _loadIncidents(path),
+    ]);
+    if (!mounted || _mode != Mode.driving) return;
+    final check = results[0] as TrafficCheck?;
+    if (check != null) {
+      final normal = _nav.route == null || _nav.route!.totalM <= 0
+          ? 0.0
+          : _nav.route!.totalS * _nav.remainingM / _nav.route!.totalM;
+      if (normal > 0) _nav.trafficFactor = (check.timeS / normal).clamp(0.5, 4.0);
+      setState(() => _traffic = check);
+      if (s.settings.autoFaster && check.faster != null && check.savingS >= 180) {
+        await _useFaster(driving: true);
+      }
+    }
+    await _drawRoute();
   }
 
   Future<void> _drawRoute() async {
@@ -284,6 +392,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         circleStrokeWidth: 3,
         circleStrokeColor: '#FFFFFF',
       ));
+      for (final i in _incidents) {
+        await m.addCircle(CircleOptions(
+          geometry: LatLng(i.point.lat, i.point.lon),
+          circleRadius: 8,
+          circleColor: i.color,
+          circleStrokeWidth: 2,
+          circleStrokeColor: '#FFFFFF',
+        ));
+      }
     } catch (_) {}
   }
 
@@ -311,11 +428,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     if (s.settings.keepScreenOn) WakelockPlus.enable();
     _nav.start(r);
+    final t0 = _traffic;
+    if (t0 != null && r.totalS > 0) _nav.trafficFactor = (t0.timeS / r.totalS).clamp(0.5, 4.0);
     if (_pos != null) _onPosition(_pos!);
     _followCamera();
+    _startTrafficTimer();
   }
 
   void _cancel() {
+    _trafficTimer?.cancel();
+    _traffic = null;
+    _incidents = [];
     _nav.stop();
     WakelockPlus.disable();
     setState(() {
@@ -325,6 +448,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     _drawRoute();
     _map?.animateCamera(CameraUpdate.tiltTo(0));
+  }
+
+  /// "Accident ahead · 1.2 km" for the next incident within 5 km.
+  String? _nextIncidentText() {
+    final r = _nav.route;
+    if (r == null || _incidents.isEmpty) return null;
+    double? best;
+    Incident? which;
+    for (final i in _incidents) {
+      final sn = snapToLine(r.points, i.point);
+      if (sn.offRouteM > 60) continue;
+      final segLen = r.cum[sn.segment + 1] - r.cum[sn.segment];
+      final along = r.cum[sn.segment] + segLen * sn.fraction - _nav.progressM;
+      if (along > 0 && along < 5000 && (best == null || along < best)) {
+        best = along;
+        which = i;
+      }
+    }
+    if (which == null) return null;
+    return '${which.label} ahead · ${formatDistance(best!)}';
   }
 
   void _onNav() {
@@ -735,9 +878,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             padding: EdgeInsets.all(12),
             child: Center(child: CircularProgressIndicator()),
           )
-        else if (r != null)
-          Text('${formatDuration(r.totalS)} · ${formatDistance(r.totalM)}',
+        else if (r != null) ...[
+          Text('${formatDuration(_traffic?.timeS ?? r.totalS)} · ${formatDistance(r.totalM)}',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: cs.primary)),
+          if (_checkingTraffic)
+            Text('Checking live traffic…', style: TextStyle(color: cs.onSurfaceVariant))
+          else if (_traffic != null)
+            Text(
+              _traffic!.delayS >= 60
+                  ? 'Includes ${formatDuration(_traffic!.delayS)} of traffic delay'
+                  : 'Traffic is light',
+              style: TextStyle(
+                  color: _traffic!.delayS >= 300 ? const Color(0xFFD32F2F) : cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w600),
+            )
+          else if (!s.settings.hasTraffic)
+            Text('No live traffic: add your TomTom key in Settings',
+                style: TextStyle(color: cs.onSurfaceVariant)),
+          if (_incidents.isNotEmpty)
+            Text(
+              '${_incidents.length} incident(s) on this route: '
+              '${_incidents.map((i) => i.label).toSet().join(', ')}',
+              style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w600),
+            ),
+          if (_traffic?.faster != null && _traffic!.savingS >= 60)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: FilledButton.tonalIcon(
+                onPressed: () => _useFaster(driving: false),
+                icon: const Icon(Icons.bolt),
+                label: Text('Faster route: saves ${formatDuration(_traffic!.savingS)}'),
+              ),
+            ),
+        ],
         if (r != null && !_loadingRoute && (r.passesZones || r.notes.isNotEmpty))
           _zoneWarning(r)
         else if (r != null && !_loadingRoute && s.settings.activeZones().isNotEmpty)
@@ -825,6 +998,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               backgroundColor: const Color(0xFFE53935),
               avatar: const Icon(Icons.warning_amber, color: Colors.white, size: 18),
               label: Text('Route passes "${_nav.route!.hits.first.zone.name}"',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ),
+      if (_nextIncidentText() != null)
+        Positioned(
+          top: top + 170,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Chip(
+              backgroundColor: const Color(0xFFFB8C00),
+              avatar: const Icon(Icons.report, color: Colors.white, size: 18),
+              label: Text(_nextIncidentText()!,
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
             ),
           ),

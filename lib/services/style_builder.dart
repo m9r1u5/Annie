@@ -20,7 +20,8 @@ class StyleBuilder {
   StyleBuilder(this.packs);
   final MapPackService packs;
 
-  Future<BuiltStyle> build({required bool night, required bool show3d}) async {
+  /// [trafficKey]: TomTom key to show live traffic colours on roads.
+  Future<BuiltStyle> build({required bool night, required bool show3d, String? trafficKey}) async {
     final assets = await packs.assetsPath();
     final installed = await packs.installedPackPaths();
     if (assets == null || installed.isEmpty) {
@@ -83,6 +84,47 @@ class StyleBuilder {
           'fill-extrusion-opacity': 0.85,
         },
       });
+    }
+
+    // Live traffic from TomTom, drawn on the roads but under the labels.
+    final key = trafficKey?.trim() ?? '';
+    if (key.isNotEmpty) {
+      sources['traffic'] = {
+        'type': 'vector',
+        'tiles': [
+          'https://api.tomtom.com/traffic/map/4/tile/flow/relative/{z}/{x}/{y}.pbf?key=${Uri.encodeQueryComponent(key)}'
+        ],
+        'minzoom': 6,
+        'maxzoom': 16,
+        'attribution': 'Traffic © TomTom',
+      };
+      final traffic = {
+        'id': 'traffic-flow',
+        'type': 'line',
+        'source': 'traffic',
+        'source-layer': 'Traffic flow',
+        'minzoom': 8,
+        'filter': ['any', ['has', 'traffic_level'], ['has', 'road_closure']],
+        'layout': {'line-cap': 'round', 'line-join': 'round'},
+        'paint': {
+          'line-color': [
+            'case',
+            ['has', 'road_closure'], '#6A1B9A',
+            ['<', ['get', 'traffic_level'], 0.4], '#D32F2F',
+            ['<', ['get', 'traffic_level'], 0.75], '#FB8C00',
+            '#43A047'
+          ],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1.5, 12, 3, 16, 6],
+          'line-opacity': [
+            'case',
+            ['has', 'road_closure'], 0.95,
+            ['>=', ['get', 'traffic_level'], 0.75], 0.5,
+            0.95
+          ],
+        },
+      };
+      final firstLabel = layers.indexWhere((l) => l['type'] == 'symbol');
+      layers.insert(firstLabel < 0 ? layers.length : firstLabel, traffic);
     }
 
     final style = {

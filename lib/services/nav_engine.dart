@@ -27,6 +27,18 @@ class NavEngine extends ChangeNotifier {
   bool arrived = false;
   bool rerouting = false;
   GeoPoint? snapped;
+
+  /// Live traffic: travel time with traffic ÷ normal travel time.
+  double trafficFactor = 1.0;
+
+  /// Route from where you are now to the end (for traffic checks).
+  List<GeoPoint> remainingPath() {
+    final r = route;
+    if (r == null) return const [];
+    final from = snapped;
+    final rest = r.points.sublist((_seg + 1).clamp(0, r.points.length));
+    return [if (from != null) from else r.points[_seg.clamp(0, r.points.length - 1)], ...rest];
+  }
   double? heading;
 
   int _offCount = 0;
@@ -49,6 +61,7 @@ class NavEngine extends ChangeNotifier {
     _seg = 0;
     nextIndex = r.maneuvers.length > 1 ? 1 : 0; // skip the "start" maneuver
     progressM = 0;
+    trafficFactor = 1.0;
     remainingM = r.totalM;
     remainingS = r.totalS;
     distToNextM = r.maneuvers.length > 1 ? r.cum[r.maneuvers[1].beginIndex] : r.totalM;
@@ -105,7 +118,7 @@ class NavEngine extends ChangeNotifier {
     if (heading == null || speedMs <= 1.5) heading = bearingDeg(a, b);
 
     remainingM = math.max(0.0, r.totalM - progressM);
-    remainingS = r.totalM > 0 ? r.totalS * remainingM / r.totalM : 0;
+    remainingS = (r.totalM > 0 ? r.totalS * remainingM / r.totalM : 0) * trafficFactor;
 
     while (nextIndex < r.maneuvers.length - 1 &&
         r.cum[r.maneuvers[nextIndex].beginIndex] <= progressM + 2) {
