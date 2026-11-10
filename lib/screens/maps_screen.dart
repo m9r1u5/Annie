@@ -39,6 +39,7 @@ class _MapsScreenState extends State<MapsScreen> {
     });
     try {
       final m = await s.packs.fetchManifest();
+      await s.packs.refreshParts();
       for (final p in m.packs) {
         _partial[p.id] = await s.packs.partialBytes(p.id);
       }
@@ -63,8 +64,11 @@ class _MapsScreenState extends State<MapsScreen> {
       builder: (c) => AlertDialog(
         title: Text('Download ${p.name}?'),
         content: Text(have > 0
-            ? 'Size: ${formatBytes(p.size)}\nAlready downloaded: ${formatBytes(have)}. It will carry on where it stopped.'
-            : 'Size: ${formatBytes(p.size)}'
+            ? 'Size: ${formatBytes(p.totalSize)}\nAlready downloaded: ${formatBytes(have)}. It will carry on where it stopped.'
+            : 'Map: ${formatBytes(p.size)}'
+                '${p.routeFile != null ? '\nOffline routing: ${formatBytes(p.routeSize)}' : ''}'
+                '${p.searchFile != null ? '\nOffline search: ${formatBytes(p.searchSize)}' : ''}'
+                '\nTotal: ${formatBytes(p.totalSize)}'
                 '${s.packs.manifest!.assetsSize > 0 && s.settings.installedAssetsVersion != s.packs.manifest!.version ? '\nPlus map fonts and icons: ${formatBytes(s.packs.manifest!.assetsSize)}' : ''}'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
@@ -158,17 +162,21 @@ class _MapsScreenState extends State<MapsScreen> {
     final partial = _partial[p.id] ?? 0;
 
     String sub;
-    if (prog != null) {
+    if (prog != null && prog.total <= 0) {
+      sub = '${prog.stage}…';
+    } else if (prog != null) {
       final pct = prog.total > 0 ? (prog.done * 100 / prog.total).clamp(0, 100).toStringAsFixed(0) : '0';
       sub = '${prog.stage}: ${formatBytes(prog.done)} of ${formatBytes(prog.total)} ($pct%)';
     } else if (update) {
-      sub = 'Update available · ${formatBytes(p.size)}';
+      sub = s.settings.installedPacks[p.id] == s.packs.manifest?.version
+          ? 'Add offline routing and search · ${formatBytes(p.routeSize + p.searchSize)}'
+          : 'Update available · ${formatBytes(p.totalSize)}';
     } else if (installed) {
-      sub = 'On this phone · ${formatBytes(p.size)}';
+      sub = 'On this phone · ${formatBytes(p.totalSize)}';
     } else if (partial > 0) {
-      sub = 'Paused at ${formatBytes(partial)} of ${formatBytes(p.size)}';
+      sub = 'Paused at ${formatBytes(partial)} of ${formatBytes(p.totalSize)}';
     } else {
-      sub = formatBytes(p.size);
+      sub = formatBytes(p.totalSize);
     }
 
     Widget trailing;

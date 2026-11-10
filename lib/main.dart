@@ -38,6 +38,9 @@ class Services {
     final s = Settings();
     await s.load();
     i = Services._(s);
+    i.routing.packs = i.packs;
+    i.search.offlineDbs = i.packs.installedSearchDbs;
+    await i.packs.refreshParts();
     await i.voice.init();
   }
 }

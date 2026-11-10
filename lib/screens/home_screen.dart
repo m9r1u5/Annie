@@ -961,6 +961,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         else if (r != null) ...[
           Text('${formatDuration(_traffic?.timeS ?? r.totalS)} · ${formatDistance(r.totalM)}',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: cs.primary)),
+          if (r.plannedOffline)
+            Row(children: [
+              Icon(Icons.offline_bolt, size: 18, color: cs.primary),
+              const SizedBox(width: 4),
+              Text('Planned on your phone (no data needed)',
+                  style: TextStyle(color: cs.onSurfaceVariant)),
+            ]),
           if (_checkingTraffic)
             Text('Checking live traffic…', style: TextStyle(color: cs.onSurfaceVariant))
           else if (_traffic != null)

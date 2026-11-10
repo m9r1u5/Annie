@@ -1,9 +1,12 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../config.dart';
 import '../utils/geo.dart';
+import 'map_pack_service.dart';
+import 'offline_router.dart';
 import 'settings.dart';
 import 'zones.dart';
 
@@ -43,6 +46,9 @@ class RouteResult {
 
   bool get passesZones => hits.isNotEmpty;
 
+  /// True if this route was planned on the phone (no internet needed).
+  bool plannedOffline = false;
+
   RouteResult(this.points, this.maneuvers, this.totalM, this.totalS)
       : cum = cumulativeDistances(points);
 }
@@ -61,6 +67,10 @@ class RoutingException implements Exception {
 class RoutingService {
   RoutingService(this.settings);
   final Settings settings;
+
+  /// Offline routing data on the phone (set at start-up).
+  MapPackService? packs;
+  bool _lastOffline = false;
 
   /// Finds a route that stays out of your active avoid zones.
   /// If that's impossible, returns the best route anyway with [RouteResult.hits]
@@ -113,6 +123,7 @@ class RoutingService {
     }
     result.hits = findZoneHits(result.points, zones);
     result.notes = notes;
+    result.plannedOffline = _lastOffline;
     return result;
   }
 
@@ -195,7 +206,44 @@ class RoutingService {
     return body;
   }
 
+  /// Plans on the phone when the offline routing data covers every stop,
+  /// otherwise (or if that fails) asks the online server.
   Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
+    final packs = this.packs;
+    final stops = (body['locations'] as List)
+        .map((l) => GeoPoint(((l as Map)['lat'] as num).toDouble(), (l['lon'] as num).toDouble()))
+        .toList();
+    String? localError;
+    if (packs != null && packs.routingBoxes.isNotEmpty && stops.every(packs.routingCovers)) {
+      try {
+        final j = await OfflineRouter.route(await packs.tilesDir(), body);
+        _lastOffline = true;
+        return j;
+      } catch (e) {
+        localError = e is PlatformException ? (e.message ?? e.code) : e.toString();
+      }
+    }
+    try {
+      final j = await _postOnline(body);
+      _lastOffline = false;
+      return j;
+    } on RoutingException catch (e) {
+      // No internet, but the phone already gave an answer: report that instead.
+      if (e.offline && localError != null) {
+        throw RoutingException('No route found: $localError');
+      }
+      // No internet and no offline data for this trip.
+      if (e.offline && packs != null && packs.routingBoxes.isNotEmpty) {
+        throw RoutingException(
+            'No internet, and this trip goes outside your downloaded provinces. '
+            'Download the provinces you drive through under Offline maps.',
+            offline: true);
+      }
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _postOnline(Map<String, dynamic> body) async {
     http.Response res;
     try {
       res = await http

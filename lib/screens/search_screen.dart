@@ -23,6 +23,7 @@ class _SearchScreenState extends State<SearchScreen> {
   List<Place> _results = [];
   bool _loading = false;
   String? _error;
+  bool _offline = false;
 
   @override
   void dispose() {
@@ -50,11 +51,15 @@ class _SearchScreenState extends State<SearchScreen> {
       if (!mounted || _ctrl.text != q) return;
       setState(() {
         _results = r;
-        _error = r.isEmpty ? 'Nothing found in South Africa.' : null;
+        _offline = Services.i.search.lastWasOffline;
+        _error = r.isEmpty
+            ? (_offline ? 'Nothing found in your downloaded provinces.' : 'Nothing found in South Africa.')
+            : null;
       });
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Search needs a data connection. Your saved places work offline.');
+        setState(() => _error = 'No signal, and no offline search on this phone yet. '
+            'Download your province under Offline maps. Your saved places work offline.');
       }
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -155,6 +160,12 @@ class _SearchScreenState extends State<SearchScreen> {
                 ),
               ),
           ] else ...[
+            if (_offline && _results.isNotEmpty)
+              const ListTile(
+                dense: true,
+                leading: Icon(Icons.cloud_off),
+                title: Text('No signal: showing results from your offline maps'),
+              ),
             if (_error != null)
               Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)),
             ..._results.map((p) => _tile(p, Icons.place)),
