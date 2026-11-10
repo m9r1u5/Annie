@@ -50,6 +50,8 @@ class Settings extends ChangeNotifier {
   bool showTraffic = true;
   bool autoFaster = true;
   bool auto3d = true;
+  bool recordTrail = true;
+  bool showTrail = true;
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -86,6 +88,8 @@ class Settings extends ChangeNotifier {
     showTraffic = _p.getBool('showTraffic') ?? true;
     autoFaster = _p.getBool('autoFaster') ?? true;
     auto3d = _p.getBool('auto3d') ?? true;
+    recordTrail = _p.getBool('recordTrail') ?? true;
+    showTrail = _p.getBool('showTrail') ?? true;
     final f = _p.getString('favourites');
     if (f != null) {
       favourites = (jsonDecode(f) as List)
@@ -136,6 +140,8 @@ class Settings extends ChangeNotifier {
     _p.setBool('showTraffic', showTraffic);
     _p.setBool('autoFaster', autoFaster);
     _p.setBool('auto3d', auto3d);
+    _p.setBool('recordTrail', recordTrail);
+    _p.setBool('showTrail', showTrail);
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }

@@ -56,6 +56,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _checkingTraffic = false;
   bool _switching = false;
 
+  // Retracing your trail
+  bool _retracing = false;
+  List<GeoPoint> _retracePath = const [];
+  Timer? _trailTimer;
+
   // Speed limits along the current route: (distance from start, km/h).
   List<(double, int)> _limits = [];
   RouteResult? _limitsFor;
@@ -78,6 +83,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _buildStyle();
     _startLocation();
     _themeTimer = Timer.periodic(const Duration(minutes: 5), (_) => _onSettings());
+    // Redraw your trail as it grows.
+    _trailTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (s.settings.showTrail) _drawRoute();
+    });
     // Weekly map update check, and catch-up when Wi-Fi comes back.
     Future.delayed(const Duration(seconds: 4), _checkMapUpdates);
     _wifiSub = s.packs.watchWifi(() async {
@@ -92,6 +101,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _wifiSub?.cancel();
     _themeTimer?.cancel();
     _trafficTimer?.cancel();
+    _trailTimer?.cancel();
+    s.trail.save();
     _nav.removeListener(_onNav);
     s.settings.removeListener(_onSettings);
     WakelockPlus.disable();
@@ -183,6 +194,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onPosition(Position p, {bool initial = false}) {
     _pos = p;
+    if (s.settings.recordTrail) s.trail.add(p.latitude, p.longitude, p.speed, p.accuracy);
     if (initial && _mode == Mode.browse) {
       _map?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 14));
     }
@@ -254,6 +266,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _reroute(GeoPoint from, double? heading) async {
     final dest = _dest;
     if (dest == null) return;
+    if (_retracing) {
+      _rejoinTrail(from);
+      return;
+    }
     try {
       RouteResult r;
       try {
@@ -349,6 +365,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _drivingTraffic() async {
+    if (_retracing) return; // never swap your trail for a "faster" road
     if (!s.settings.hasTraffic || _mode != Mode.driving || _nav.remainingM < 2000) return;
     final path = _nav.remainingPath();
     final results = await Future.wait<Object?>([
@@ -391,14 +408,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       } catch (_) {}
     }
+    // Your trail (last hour) in orange.
+    if (s.settings.showTrail && !_retracing) {
+      final trail = s.trail.recent(const Duration(hours: 1));
+      if (trail.length >= 2) {
+        try {
+          await m.addLine(LineOptions(
+            geometry: trail.map((p) => LatLng(p.lat, p.lon)).toList(),
+            lineColor: '#FF7043',
+            lineWidth: 4,
+            lineOpacity: 0.75,
+          ));
+        } catch (_) {}
+      }
+    }
     final r = _route;
     if (r == null || _mode == Mode.browse) return;
     final geom = r.points.map((p) => LatLng(p.lat, p.lon)).toList();
     try {
       await m.addLine(LineOptions(
-          geometry: geom, lineColor: '#0D47A1', lineWidth: 11, lineOpacity: 0.9));
+          geometry: geom, lineColor: _retracing ? '#BF360C' : '#0D47A1', lineWidth: 11, lineOpacity: 0.9));
       await m.addLine(LineOptions(
-          geometry: geom, lineColor: Brand.routeBlue, lineWidth: 7, lineOpacity: 1));
+          geometry: geom, lineColor: _retracing ? '#FF7043' : Brand.routeBlue, lineWidth: 7, lineOpacity: 1));
       // Stretches that go through a zone are drawn red.
       for (final h in r.hits) {
         for (final st in h.stretches) {
@@ -468,6 +499,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _cancel() {
+    _retracing = false;
+    _retracePath = const [];
     _trafficTimer?.cancel();
     _limits = [];
     _limitsFor = null;
@@ -852,6 +885,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bottom: _mode == Mode.preview ? 250 : 200,
         child: Column(
           children: [
+            _roundButton(Icons.history, _showRetrace, tooltip: 'Retrace my trail', color: const Color(0xFFFF7043)),
+            const SizedBox(height: 12),
             _text3d(_toggle3d),
             const SizedBox(height: 12),
             _roundButton(Icons.my_location, () {
@@ -943,6 +978,106 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onPressed: () => place == null ? _setFavourite(isHome) : _routeTo(place),
       onLongPress: () => _setFavourite(isHome),
     );
+  }
+
+  // ---------------- Retrace your trail ----------------
+
+  String _ago(DateTime t) {
+    final m = DateTime.now().difference(t).inMinutes;
+    if (m < 60) return '$m min ago';
+    return '${m ~/ 60} h ${m % 60} min ago';
+  }
+
+  Future<void> _showRetrace() async {
+    final here = _here;
+    final trail = s.trail;
+    if (here == null || trail.points.length < 3) {
+      _toast(s.settings.recordTrail
+          ? 'No trail yet. Your trail is recorded while the app is open and you are driving.'
+          : 'Trail recording is off. Turn it on in Settings.');
+      return;
+    }
+    final start = trail.tripStartIndex();
+    final options = <(String, String, int)>[];
+    final startPath = trail.pathBack(here, start);
+    options.add((
+      'Back to where this trip started',
+      '${formatDistance(trail.lengthM(startPath))} · ${_ago(trail.points[start].time)}',
+      start
+    ));
+    for (final mins in [5, 10, 20, 30]) {
+      final i = trail.indexAgo(Duration(minutes: mins));
+      if (i <= start || i >= trail.points.length - 2) continue;
+      final path = trail.pathBack(here, i);
+      options.add(('Back $mins minutes', formatDistance(trail.lengthM(path)), i));
+    }
+    final chosen = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 4),
+            child: Text('Get out the way you came in',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text('Follows the exact streets you drove, in reverse. Watch for one-way streets.'),
+          ),
+          for (final o in options)
+            ListTile(
+              leading: const Icon(Icons.history, color: Color(0xFFFF7043)),
+              title: Text(o.$1, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text(o.$2),
+              onTap: () => Navigator.pop(c, o.$3),
+            ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final path = trail.pathBack(here, chosen);
+    if (path.length < 2 || trail.lengthM(path) < 60) {
+      _toast('You are already there.');
+      return;
+    }
+    _startRetrace(path);
+  }
+
+  void _startRetrace(List<GeoPoint> path) {
+    if (_mode == Mode.driving) _nav.stop();
+    final r = s.trail.routeFromPath(path);
+    final end = path.last;
+    setState(() {
+      _retracing = true;
+      _retracePath = path;
+      _dest = Place('Back along your trail', '', end.lat, end.lon);
+      _route = r;
+      _traffic = null;
+      _incidents = [];
+      _mode = Mode.preview;
+    });
+    _startDriving();
+    _drawRoute();
+  }
+
+  /// Off the trail while retracing: lead you back onto it, then follow it.
+  void _rejoinTrail(GeoPoint from) {
+    final path = _retracePath;
+    if (path.length < 2) return;
+    final sn = snapToLine(path, from);
+    final rest = path.sublist((sn.segment + 1).clamp(0, path.length - 1));
+    final newPath = [from, ...rest];
+    if (newPath.length < 2) return;
+    final r = s.trail.routeFromPath(newPath);
+    _route = r;
+    _nav.setRoute(r);
+    if (sn.offRouteM > 300) {
+      _nav.rerouteError = 'You are ${formatDistance(sn.offRouteM)} from your trail. Head back to the orange line.';
+    }
+    _drawRoute();
+    if (mounted) setState(() {});
   }
 
   Future<void> _openZones() async {
@@ -1150,7 +1285,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           color: Colors.white, fontSize: 30, fontWeight: FontWeight.w800)),
                   Text(
                     m == null || m.street.isEmpty
-                        ? (actionText.isEmpty ? '' : actionText[0].toUpperCase() + actionText.substring(1))
+                        ? (actionText.isEmpty ? '' : actionText[0].toUpperCase() + actionText.substring(1)) +
+                            (_retracing ? (s.voice.lang == 'af' ? ' · terug op jou spoor' : ' · retracing your trail') : '')
                         : m.street,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -1276,6 +1412,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         right: 12,
         bottom: 150 + MediaQuery.of(context).padding.bottom,
         child: Column(children: [
+          if (!_retracing) ...[
+            _roundButton(Icons.history, _showRetrace, tooltip: 'Retrace my trail', color: const Color(0xFFFF7043)),
+            const SizedBox(height: 12),
+          ],
           _text3d(_toggle3d),
           const SizedBox(height: 12),
           _roundButton(s.settings.voiceOn ? Icons.volume_up : Icons.volume_off, () {

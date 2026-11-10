@@ -220,6 +220,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: st.autoFaster,
           onChanged: st.hasTraffic ? (v) => _set((x) => x.autoFaster = v) : null,
         ),
+        _header('Trail'),
+        SwitchListTile(
+          title: const Text('Record my trail'),
+          subtitle: const Text('Keeps the last 12 hours of where you drove (only on this phone), '
+              'so you can retrace your way out of an area.'),
+          value: st.recordTrail,
+          onChanged: (v) => _set((x) => x.recordTrail = v),
+        ),
+        SwitchListTile(
+          title: const Text('Show my trail on the map'),
+          subtitle: const Text('Orange line of the last hour.'),
+          value: st.showTrail,
+          onChanged: (v) => _set((x) => x.showTrail = v),
+        ),
+        ListTile(
+          leading: const Icon(Icons.delete_outline),
+          title: const Text('Clear my trail'),
+          onTap: () async {
+            await s.trail.clear();
+            _toast('Trail cleared.');
+          },
+        ),
         _header('Display'),
         ListTile(
           title: const Text('Day / night colours'),

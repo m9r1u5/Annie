@@ -8,6 +8,7 @@ import 'services/search_service.dart';
 import 'services/settings.dart';
 import 'services/style_builder.dart';
 import 'services/traffic_service.dart';
+import 'services/trail_service.dart';
 import 'services/update_service.dart';
 import 'services/voice_service.dart';
 
@@ -18,6 +19,7 @@ class Services {
         routing = RoutingService(settings),
         search = SearchService(),
         traffic = TrafficService(settings),
+        trail = TrailService(),
         voice = VoiceService(settings),
         updates = UpdateService() {
     styles = StyleBuilder(packs);
@@ -30,6 +32,7 @@ class Services {
   final RoutingService routing;
   final SearchService search;
   final TrafficService traffic;
+  final TrailService trail;
   final VoiceService voice;
   final UpdateService updates;
   late final StyleBuilder styles;
@@ -41,6 +44,7 @@ class Services {
     i.routing.packs = i.packs;
     i.search.offlineDbs = i.packs.installedSearchDbs;
     await i.packs.refreshParts();
+    await i.trail.load();
     await i.voice.init();
   }
 }
