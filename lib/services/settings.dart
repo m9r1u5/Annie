@@ -205,6 +205,14 @@ class Settings extends ChangeNotifier {
     update((s) => s.favourites.removeWhere((f) => samePlace(f, place)));
   }
 
+  void removeRecent(Place place) {
+    update((s) => s.recents.removeWhere((p) => samePlace(p, place)));
+  }
+
+  void clearRecents() {
+    update((s) => s.recents.clear());
+  }
+
   /// Night colours between 18:30 and 05:30 when theme is auto.
   bool get isNight {
     switch (theme) {

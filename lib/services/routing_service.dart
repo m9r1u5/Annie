@@ -111,7 +111,7 @@ class RoutingService {
   /// Finds a route that stays out of your active avoid zones.
   /// If that's impossible, returns the best route anyway with [RouteResult.hits]
   /// filled in so the app can warn you before you drive.
-  Future<RouteResult> route(GeoPoint from, GeoPoint to, {double? headingDeg}) async {
+  Future<RouteResult> route(GeoPoint from, GeoPoint to, {double? headingDeg, List<GeoPoint> vias = const []}) async {
     final zones = settings.activeZones();
     final notes = <String>[];
     // A zone around your start or destination can't be avoided completely.
@@ -121,6 +121,8 @@ class RoutingService {
         notes.add('You are starting inside "${z.zone.name}".');
       } else if (z.contains(to)) {
         notes.add('Your destination is inside "${z.zone.name}".');
+      } else if (vias.any(z.contains)) {
+        notes.add('A town you chose to drive through is inside "${z.zone.name}".');
       } else {
         excludable.add(z);
       }
@@ -129,7 +131,7 @@ class RoutingService {
     RouteResult? result;
     if (excludable.isNotEmpty) {
       try {
-        final body = _body(from, to, headingDeg, exclude: excludable);
+        final body = _body(from, to, headingDeg, exclude: excludable, vias: vias);
         result = _parse(await _post(body));
         result.request = body;
       } on RoutingException catch (e) {
@@ -140,7 +142,7 @@ class RoutingService {
       }
     }
     if (result == null) {
-      final body = _body(from, to, headingDeg, alternates: zones.isEmpty ? 0 : 2);
+      final body = _body(from, to, headingDeg, alternates: zones.isEmpty ? 0 : 2, vias: vias);
       final j = await _post(body);
       final options = <RouteResult>[_parse(j)..request = (Map.of(body)..remove('alternates'))];
       for (final alt in (j['alternates'] as List?) ?? const []) {
@@ -220,7 +222,8 @@ class RoutingService {
   }
 
   /// Up to 3 different routes to choose from, safest first then quickest.
-  Future<List<RouteResult>> routeOptions(GeoPoint from, GeoPoint to, {double? headingDeg}) async {
+  Future<List<RouteResult>> routeOptions(GeoPoint from, GeoPoint to,
+      {double? headingDeg, List<GeoPoint> vias = const []}) async {
     final zones = settings.activeZones();
     final notes = <String>[];
     final excludable = <ActiveZone>[];
@@ -229,6 +232,8 @@ class RoutingService {
         notes.add('You are starting inside "${z.zone.name}".');
       } else if (z.contains(to)) {
         notes.add('Your destination is inside "${z.zone.name}".');
+      } else if (vias.any(z.contains)) {
+        notes.add('A town you chose to drive through is inside "${z.zone.name}".');
       } else {
         excludable.add(z);
       }
@@ -250,14 +255,14 @@ class RoutingService {
     var options = <RouteResult>[];
     if (excludable.isNotEmpty) {
       try {
-        final body = _body(from, to, headingDeg, exclude: excludable, alternates: 2);
+        final body = _body(from, to, headingDeg, exclude: excludable, alternates: 2, vias: vias);
         options = parseAll(await _post(body), body);
       } on RoutingException catch (e) {
         if (e.offline) rethrow;
       }
     }
     if (options.isEmpty) {
-      final body = _body(from, to, headingDeg, alternates: 2);
+      final body = _body(from, to, headingDeg, alternates: 2, vias: vias);
       options = parseAll(await _post(body), body);
     }
     for (final o in options) {
@@ -322,7 +327,10 @@ class RoutingService {
   }
 
   Map<String, dynamic> _body(GeoPoint from, GeoPoint to, double? headingDeg,
-      {List<ActiveZone> exclude = const [], int alternates = 0, List<Map<String, dynamic>>? locations}) {
+      {List<ActiveZone> exclude = const [],
+      int alternates = 0,
+      List<Map<String, dynamic>>? locations,
+      List<GeoPoint> vias = const []}) {
     final start = <String, dynamic>{'lat': from.lat, 'lon': from.lon};
     if (headingDeg != null) {
       start['heading'] = headingDeg.round();
@@ -332,6 +340,8 @@ class RoutingService {
       'locations': locations ??
           [
             start,
+            // Towns you chose to drive through, in order (no stop there).
+            for (final v in vias) {'lat': v.lat, 'lon': v.lon, 'type': 'through', 'radius': 150},
             {'lat': to.lat, 'lon': to.lon},
           ],
       'costing': 'auto',
@@ -351,7 +361,8 @@ class RoutingService {
         return ring;
       }).toList();
     }
-    if (alternates > 0) body['alternates'] = alternates;
+    // The router can only offer alternatives between two points.
+    if (alternates > 0 && vias.isEmpty && locations == null) body['alternates'] = alternates;
     return body;
   }
 

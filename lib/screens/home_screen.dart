@@ -57,6 +57,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _checkingTraffic = false;
   bool _switching = false;
 
+  // Towns/places to drive through on the way, in order
+  List<Place> _vias = [];
+
   // Route options to choose from before you drive
   List<RouteResult> _options = [];
   final Map<RouteResult, TrafficCheck?> _optTraffic = {};
@@ -209,6 +212,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _nav.onPosition(GeoPoint(p.latitude, p.longitude), p.speed,
           p.heading >= 0 ? p.heading : null);
       _maybeAuto3d();
+      _dropPassedVias(GeoPoint(p.latitude, p.longitude));
       if (_follow) _followCamera();
     }
   }
@@ -237,7 +241,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (place != null) _routeTo(place);
   }
 
-  Future<void> _routeTo(Place place) async {
+  Future<void> _routeTo(Place place, {bool keepVias = false}) async {
+    if (!keepVias) _vias = [];
     final from = _here;
     if (from == null) {
       _toast('Waiting for your GPS position…');
@@ -251,7 +256,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     try {
       final options = await s.routing.routeOptions(from, place.point,
-          headingDeg: (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null);
+          headingDeg: (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null,
+          vias: _vias.map((v) => v.point).toList());
       if (!mounted) return;
       final r = options.first;
       setState(() {
@@ -284,11 +290,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       RouteResult r;
       try {
-        r = await s.routing.route(from, dest.point, headingDeg: heading);
+        r = await s.routing.route(from, dest.point,
+            headingDeg: heading, vias: _vias.map((v) => v.point).toList());
       } catch (_) {
         // Try once more without the driving direction (it can confuse the
         // router on big interchanges and when GPS direction is off).
-        r = await s.routing.route(from, dest.point);
+        r = await s.routing.route(from, dest.point, vias: _vias.map((v) => v.point).toList());
       }
       if (!mounted || _mode != Mode.driving) return;
       _route = r;
@@ -323,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final f = _optTraffic[o]?.faster;
       if (f != null && (alt == null || f.timeS < alt.timeS)) alt = f;
     }
-    if (alt != null && alt.timeS < best - 60 && _options.length < 4) {
+    if (alt != null && _vias.isEmpty && alt.timeS < best - 60 && _options.length < 4) {
       final heading = (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null;
       final r = await s.routing.routeAlong(alt.points, headingDeg: heading);
       if (r != null && mounted && identical(_options.first, opts.first)) {
@@ -336,6 +343,78 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _checkingTraffic = false);
     _selectOption(_route ?? _options.first, refit: false);
+  }
+
+  // ---------------- Via towns ----------------
+
+  Future<void> _addVia() async {
+    final dest = _dest;
+    if (dest == null) return;
+    final place = await Navigator.push<Place>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => SearchScreen(near: _here, title: 'Drive through which town or place?')),
+    );
+    if (place == null || !mounted) return;
+    setState(() => _vias = [..._vias, place]);
+    _routeTo(dest, keepVias: true);
+  }
+
+  void _removeVia(int i) {
+    final dest = _dest;
+    setState(() => _vias = [..._vias]..removeAt(i));
+    if (dest != null) _routeTo(dest, keepVias: true);
+  }
+
+  void _moveVia(int i, int dir) {
+    final j = i + dir;
+    if (j < 0 || j >= _vias.length) return;
+    final list = [..._vias];
+    final v = list.removeAt(i);
+    list.insert(j, v);
+    setState(() => _vias = list);
+    if (_dest != null) _routeTo(_dest!, keepVias: true);
+  }
+
+  /// Once you've driven through a via town, it no longer counts for re-routing.
+  void _dropPassedVias(GeoPoint here) {
+    if (_vias.isEmpty) return;
+    final first = _vias.first;
+    if (distanceM(here, first.point) < 700) {
+      setState(() => _vias = _vias.sublist(1));
+      _toast('Passed ${first.name}.');
+    }
+  }
+
+  Widget _viaRow(ColorScheme cs) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          if (_vias.isNotEmpty) Text('Via', style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w600)),
+          for (var i = 0; i < _vias.length; i++)
+            InputChip(
+              avatar: CircleAvatar(
+                backgroundColor: cs.primary,
+                child: Text('${i + 1}', style: TextStyle(color: cs.onPrimary, fontSize: 12)),
+              ),
+              label: Text(_vias[i].name, overflow: TextOverflow.ellipsis),
+              onDeleted: () => _removeVia(i),
+              // Long-press to move it earlier in the order.
+              onPressed: i == 0 ? null : () => _moveVia(i, -1),
+              tooltip: i == 0 ? null : 'Tap to move earlier',
+            ),
+          ActionChip(
+            avatar: const Icon(Icons.add_road, size: 18),
+            label: Text(_vias.isEmpty ? 'Add via (drive through a town)' : 'Add another'),
+            onPressed: _addVia,
+          ),
+        ],
+      ),
+    );
   }
 
   /// Tap a route card (or its line on the map) to choose it.
@@ -466,7 +545,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (normal > 0) _nav.trafficFactor = (check.timeS / normal).clamp(0.5, 4.0);
       setState(() => _traffic = check);
       if (_nav.route != null) _setLimits(check, _nav.route!, _nav.progressM);
-      if (s.settings.autoFaster && check.faster != null && check.savingS >= 180) {
+      // Never swap the towns you chose to drive through for a "faster" road.
+      if (s.settings.autoFaster && _vias.isEmpty && check.faster != null && check.savingS >= 180) {
         await _useFaster(driving: true);
       }
     }
@@ -549,6 +629,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         circleStrokeWidth: 3,
         circleStrokeColor: '#FFFFFF',
       ));
+      for (var i = 0; i < _vias.length; i++) {
+        final v = _vias[i];
+        await m.addCircle(CircleOptions(
+          geometry: LatLng(v.lat, v.lon),
+          circleRadius: 9,
+          circleColor: '#0E7C7B',
+          circleStrokeWidth: 3,
+          circleStrokeColor: '#FFFFFF',
+        ));
+      }
       for (final i in _incidents) {
         await m.addCircle(CircleOptions(
           geometry: LatLng(i.point.lat, i.point.lon),
@@ -600,6 +690,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _cancel() {
+    _vias = [];
     _options = [];
     _optTraffic.clear();
     _tomtomOptions.clear();
@@ -1064,11 +1155,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
               ),
               icon: const Icon(Icons.star),
-              label: const Text('Saved', style: TextStyle(fontSize: 16)),
+              label: const FittedBox(
+                  fit: BoxFit.scaleDown, child: Text('Saved', maxLines: 1, style: TextStyle(fontSize: 16))),
               onPressed: _openFavourites,
             ),
           ),
         ]),
+        // Recent destinations: tap to go again, ✕ to remove.
+        if (st.recents.isNotEmpty)
+          SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(top: 8),
+              children: [
+                for (final p in st.recents.take(8))
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: InputChip(
+                      avatar: const Icon(Icons.history, size: 18),
+                      label: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 150),
+                        child: Text(p.name, overflow: TextOverflow.ellipsis),
+                      ),
+                      onPressed: () => _routeTo(p),
+                      onDeleted: () {
+                        st.removeRecent(p);
+                        setState(() {});
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -1081,7 +1200,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
       ),
       icon: Icon(place == null ? Icons.add : icon),
-      label: Text(label, style: const TextStyle(fontSize: 16)),
+      label: FittedBox(fit: BoxFit.scaleDown, child: Text(label, maxLines: 1, style: const TextStyle(fontSize: 16))),
       onPressed: () => place == null ? _setFavourite(isHome) : _routeTo(place),
       onLongPress: () => _setFavourite(isHome),
     );
@@ -1397,6 +1516,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if ((_dest?.address ?? '').isNotEmpty)
           Text(_dest!.address, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: TextStyle(color: cs.onSurfaceVariant)),
+        if (!_retracing) _viaRow(cs),
         const SizedBox(height: 10),
         if (_loadingRoute)
           const Padding(

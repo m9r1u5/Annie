@@ -77,7 +77,7 @@ class _SearchScreenState extends State<SearchScreen> {
     return Place('Coordinates', '$lat, $lon', lat, lon);
   }
 
-  Widget _tile(Place p, IconData icon) {
+  Widget _tile(Place p, IconData icon, {VoidCallback? onDelete}) {
     String? dist;
     if (widget.near != null) dist = formatDistance(distanceM(widget.near!, p.point));
     return ListTile(
@@ -86,7 +86,12 @@ class _SearchScreenState extends State<SearchScreen> {
       subtitle: p.address.isEmpty
           ? null
           : Text(p.address, maxLines: 2, overflow: TextOverflow.ellipsis),
-      trailing: dist == null ? null : Text(dist),
+      trailing: onDelete != null
+          ? Row(mainAxisSize: MainAxisSize.min, children: [
+              if (dist != null) Text(dist),
+              IconButton(icon: const Icon(Icons.close), tooltip: 'Remove from recent', onPressed: onDelete),
+            ])
+          : (dist == null ? null : Text(dist)),
       onTap: () => Navigator.pop(context, p),
       onLongPress: () async {
         final name = await askPlaceName(context, p.name == 'Coordinates' ? '' : p.name);
@@ -185,11 +190,23 @@ class _SearchScreenState extends State<SearchScreen> {
               ),
             ...st.favourites.map((p) => _tile(p, Icons.star)),
             if (st.recents.isNotEmpty)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-                child: Text('Recent', style: TextStyle(fontWeight: FontWeight.w700)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 4, 0),
+                child: Row(children: [
+                  const Expanded(child: Text('Recent', style: TextStyle(fontWeight: FontWeight.w700))),
+                  TextButton(
+                    onPressed: () {
+                      st.clearRecents();
+                      setState(() {});
+                    },
+                    child: const Text('Clear all'),
+                  ),
+                ]),
               ),
-            ...st.recents.map((p) => _tile(p, Icons.history)),
+            ...st.recents.map((p) => _tile(p, Icons.history, onDelete: () {
+                  st.removeRecent(p);
+                  setState(() {});
+                })),
             if (st.recents.isEmpty && st.home == null)
               const Padding(
                 padding: EdgeInsets.all(24),
