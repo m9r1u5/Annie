@@ -229,6 +229,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onChanged: (v) => _set((x) => x.recordTrail = v),
         ),
         SwitchListTile(
+          title: const Text('Record in background'),
+          subtitle: const Text('Keep recording your trail with the screen off even when you are not '
+              'navigating (shows a notification, uses more battery). During a trip the app '
+              'always keeps running with the screen off.'),
+          value: st.backgroundTrail,
+          onChanged: st.recordTrail ? (v) => _set((x) => x.backgroundTrail = v) : null,
+        ),
+        SwitchListTile(
           title: const Text('Show my trail on the map'),
           subtitle: const Text('Orange line of the last hour. You can also switch it on and off '
               'with the orange history button on the map.'),

@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'dart:async';
 import 'dart:math' show Point;
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -192,12 +194,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .timeout(const Duration(seconds: 15));
       _onPosition(first, initial: true);
     } catch (_) {}
-    _posSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 3,
-      ),
-    ).listen(_onPosition);
+    _restartGps();
+  }
+
+  bool _gpsInBackground = false;
+
+  /// While a trip is running (or background trail recording is on), GPS runs
+  /// as an Android foreground service with a notification, so navigation keeps
+  /// working with the screen off or another app open.
+  void _restartGps() {
+    if (!_hasLocation) return;
+    final background = _mode == Mode.driving || s.settings.backgroundTrail;
+    if (_posSub != null && background == _gpsInBackground) return;
+    _posSub?.cancel();
+    _gpsInBackground = background;
+    final LocationSettings settings = Platform.isAndroid
+        ? AndroidSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 3,
+            intervalDuration: const Duration(seconds: 1),
+            foregroundNotificationConfig: background
+                ? ForegroundNotificationConfig(
+                    notificationTitle: _mode == Mode.driving
+                        ? 'SafeRoute SA is navigating'
+                        : 'SafeRoute SA is recording your trail',
+                    notificationText: _mode == Mode.driving
+                        ? 'Keeps guiding you with the screen off. End the trip in the app to stop.'
+                        : 'Turn off "Record in background" in Settings to stop.',
+                    notificationIcon: const AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+                    enableWakeLock: true,
+                    setOngoing: true,
+                  )
+                : null,
+          )
+        : const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 3);
+    _posSub = Geolocator.getPositionStream(locationSettings: settings).listen(_onPosition);
+  }
+
+  /// First trip: ask for the notification and to be left alone by battery saver.
+  Future<void> _askBackgroundPermissions() async {
+    if (!Platform.isAndroid) return;
+    try {
+      if (await ph.Permission.notification.isDenied) await ph.Permission.notification.request();
+      if (!s.settings.askedBattery && !await ph.Permission.ignoreBatteryOptimizations.isGranted) {
+        s.settings.update((x) => x.askedBattery = true);
+        if (!mounted) return;
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            scrollable: true,
+            title: const Text('Keep navigating with the screen off'),
+            content: const Text(
+                "Samsung's battery saver can stop navigation when the screen is off. "
+                'Allow SafeRoute SA to run without battery restrictions?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Not now')),
+              FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Allow')),
+            ],
+          ),
+        );
+        if (ok == true) await ph.Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (_) {}
   }
 
   GeoPoint? get _here => _pos == null ? null : GeoPoint(_pos!.latitude, _pos!.longitude);
@@ -689,6 +747,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (s.settings.keepScreenOn) WakelockPlus.enable();
     _manual3d = false;
     _speedLog.clear();
+    _restartGps(); // keep running with the screen off
+    _askBackgroundPermissions();
     _nav.start(r);
     final t0 = _traffic;
     if (t0 != null && r.totalS > 0) _nav.trafficFactor = (t0.timeS / r.totalS).clamp(0.5, 4.0);
@@ -704,6 +764,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _cancel() {
     _vias = [];
+    _mode = Mode.browse;
+    _restartGps(); // trip over: stop the background service
     _options = [];
     _optTraffic.clear();
     _tomtomOptions.clear();
@@ -1058,6 +1120,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _roundButton(Icons.settings, () async {
               await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
               _buildStyle();
+              _restartGps();
             }, tooltip: 'Settings'),
             const SizedBox(width: 10),
             _roundButton(Icons.shield, _openZones,

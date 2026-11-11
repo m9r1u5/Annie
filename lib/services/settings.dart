@@ -52,6 +52,8 @@ class Settings extends ChangeNotifier {
   bool auto3d = true;
   bool recordTrail = true;
   bool showTrail = false; // off until you switch it on
+  bool backgroundTrail = false;
+  bool askedBattery = false;
   DateTime? lastMapCheck;
 
   /// Pack id -> map version installed (e.g. "20261108").
@@ -90,6 +92,8 @@ class Settings extends ChangeNotifier {
     auto3d = _p.getBool('auto3d') ?? true;
     recordTrail = _p.getBool('recordTrail') ?? true;
     showTrail = _p.getBool('trailVisible') ?? false;
+    backgroundTrail = _p.getBool('backgroundTrail') ?? false;
+    askedBattery = _p.getBool('askedBattery') ?? false;
     final f = _p.getString('favourites');
     if (f != null) {
       favourites = (jsonDecode(f) as List)
@@ -142,6 +146,8 @@ class Settings extends ChangeNotifier {
     _p.setBool('auto3d', auto3d);
     _p.setBool('recordTrail', recordTrail);
     _p.setBool('trailVisible', showTrail);
+    _p.setBool('backgroundTrail', backgroundTrail);
+    _p.setBool('askedBattery', askedBattery);
     if (lastMapCheck != null) {
       _p.setInt('lastMapCheck', lastMapCheck!.millisecondsSinceEpoch);
     }

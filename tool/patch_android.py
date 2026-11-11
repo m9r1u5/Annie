@@ -13,6 +13,11 @@ permissions = [
     "android.permission.ACCESS_FINE_LOCATION",
     "android.permission.ACCESS_COARSE_LOCATION",
     "android.permission.WAKE_LOCK",
+    # Keep navigating with the screen off / app in the background.
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_LOCATION",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
 ]
 lines = "".join(
     f'    <uses-permission android:name="{p}"/>\n'
