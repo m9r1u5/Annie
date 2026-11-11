@@ -230,7 +230,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         SwitchListTile(
           title: const Text('Show my trail on the map'),
-          subtitle: const Text('Orange line of the last hour.'),
+          subtitle: const Text('Orange line of the last hour. You can also switch it on and off '
+              'with the orange history button on the map.'),
           value: st.showTrail,
           onChanged: (v) => _set((x) => x.showTrail = v),
         ),

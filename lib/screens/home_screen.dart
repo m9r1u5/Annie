@@ -992,7 +992,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bottom: _mode == Mode.preview ? 250 : 200,
         child: Column(
           children: [
-            _roundButton(Icons.history, _showRetrace, tooltip: 'Retrace my trail', color: const Color(0xFFFF7043)),
+            _trailButtons(),
             const SizedBox(height: 12),
             _text3d(_toggle3d),
             const SizedBox(height: 12),
@@ -1103,6 +1103,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ---------------- Retrace your trail ----------------
+
+  /// Orange history button switches your trail on/off on the map.
+  /// While it's on, a "Retrace" button next to it lets you drive it back.
+  Widget _trailButtons() {
+    final on = s.settings.showTrail;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      if (on)
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFFF7043),
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 48),
+            ),
+            onPressed: _showRetrace,
+            icon: const Icon(Icons.u_turn_left),
+            label: const Text('Retrace'),
+          ),
+        ),
+      _roundButton(
+        Icons.history,
+        _toggleTrail,
+        tooltip: on ? 'Hide my trail' : 'Show my trail',
+        color: on ? const Color(0xFFFF7043) : null,
+      ),
+    ]);
+  }
+
+  void _toggleTrail() {
+    s.settings.update((x) => x.showTrail = !x.showTrail);
+    setState(() {});
+    _drawRoute();
+    _toast(s.settings.showTrail ? 'Showing your trail (last hour). Tap Retrace to drive it back.' : 'Trail hidden.');
+  }
 
   String _ago(DateTime t) {
     final m = DateTime.now().difference(t).inMinutes;
@@ -1598,7 +1633,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (!_retracing) ...[
             _roundButton(Icons.search, _findWhileDriving, tooltip: 'Find fuel, food, police…'),
             const SizedBox(height: 12),
-            _roundButton(Icons.history, _showRetrace, tooltip: 'Retrace my trail', color: const Color(0xFFFF7043)),
+            _trailButtons(),
             const SizedBox(height: 12),
           ],
           _text3d(_toggle3d),
