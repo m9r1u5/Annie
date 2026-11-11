@@ -57,6 +57,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _checkingTraffic = false;
   bool _switching = false;
 
+  // Route options to choose from before you drive
+  List<RouteResult> _options = [];
+  final Map<RouteResult, TrafficCheck?> _optTraffic = {};
+  final Set<RouteResult> _tomtomOptions = {};
+  final Map<String, RouteResult> _lineToOption = {};
+
   // Retracing your trail
   bool _retracing = false;
   List<GeoPoint> _retracePath = const [];
@@ -244,17 +250,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _mode = Mode.preview;
     });
     try {
-      final r = await s.routing.route(from, place.point,
+      final options = await s.routing.routeOptions(from, place.point,
           headingDeg: (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null);
       if (!mounted) return;
+      final r = options.first;
       setState(() {
+        _options = options;
+        _optTraffic.clear();
+        _tomtomOptions.clear();
         _route = r;
         _traffic = null;
         _incidents = [];
       });
       await _drawRoute();
-      _fitRoute(r);
-      _previewTraffic(r);
+      _fitAll(options);
+      _previewTrafficAll();
       _loadLanes(r);
     } catch (e) {
       _toast(e.toString());
@@ -294,6 +304,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // ---------------- Live traffic ----------------
+
+  /// Live traffic for every route option, plus TomTom's own faster route.
+  Future<void> _previewTrafficAll() async {
+    if (!s.settings.hasTraffic || _options.isEmpty) return;
+    setState(() => _checkingTraffic = true);
+    final opts = List.of(_options);
+    final checks = await Future.wait(opts.map((o) => s.traffic.check(o.points)));
+    if (!mounted || !identical(_options.first, opts.first)) return;
+    for (var i = 0; i < opts.length; i++) {
+      _optTraffic[opts[i]] = checks[i];
+    }
+    // TomTom found something quicker than all of these? Offer it as an option.
+    TrafficAlt? alt;
+    double best = double.infinity;
+    for (final o in opts) {
+      best = (_optTraffic[o]?.timeS ?? o.totalS) < best ? (_optTraffic[o]?.timeS ?? o.totalS) : best;
+      final f = _optTraffic[o]?.faster;
+      if (f != null && (alt == null || f.timeS < alt.timeS)) alt = f;
+    }
+    if (alt != null && alt.timeS < best - 60 && _options.length < 4) {
+      final heading = (_pos?.heading ?? -1) >= 0 ? _pos!.heading : null;
+      final r = await s.routing.routeAlong(alt.points, headingDeg: heading);
+      if (r != null && mounted && identical(_options.first, opts.first)) {
+        r.notes = opts.first.notes;
+        _options = [..._options, r];
+        _optTraffic[r] = TrafficCheck(alt.timeS, 0, null);
+        _tomtomOptions.add(r);
+      }
+    }
+    if (!mounted) return;
+    setState(() => _checkingTraffic = false);
+    _selectOption(_route ?? _options.first, refit: false);
+  }
+
+  /// Tap a route card (or its line on the map) to choose it.
+  Future<void> _selectOption(RouteResult r, {bool refit = false}) async {
+    setState(() {
+      _route = r;
+      _traffic = _optTraffic[r];
+      _incidents = [];
+    });
+    _setLimits(_traffic, r, 0);
+    await _drawRoute();
+    if (refit) _fitRoute(r);
+    if (r.lanes.isEmpty) _loadLanes(r);
+    if (s.settings.hasTraffic) {
+      await _loadIncidents(r.points);
+      if (mounted && identical(_route, r)) {
+        setState(() {});
+        _drawRoute();
+      }
+    }
+  }
+
+  void _onLineTapped(Line line) {
+    final r = _lineToOption[line.id];
+    if (r != null && _mode == Mode.preview && !identical(r, _route)) _selectOption(r);
+  }
+
+  void _fitAll(List<RouteResult> routes) {
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    for (final r in routes) {
+      for (final p in r.points) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+    }
+    _map?.animateCamera(CameraUpdate.newLatLngBounds(
+      LatLngBounds(southwest: LatLng(minLat, minLon), northeast: LatLng(maxLat, maxLon)),
+      left: 60, right: 60, top: 140, bottom: 380,
+    ));
+  }
 
   Future<void> _previewTraffic(RouteResult r) async {
     if (!s.settings.hasTraffic) return;
@@ -425,6 +509,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final r = _route;
     if (r == null || _mode == Mode.browse) return;
+    _lineToOption.clear();
+    if (_mode == Mode.preview && _options.length > 1) {
+      for (final o in _options) {
+        if (identical(o, r)) continue;
+        try {
+          final line = await m.addLine(LineOptions(
+            geometry: o.points.map((p) => LatLng(p.lat, p.lon)).toList(),
+            lineColor: '#8D99A6',
+            lineWidth: 8,
+            lineOpacity: 0.9,
+          ));
+          _lineToOption[line.id] = o;
+        } catch (_) {}
+      }
+    }
     final geom = r.points.map((p) => LatLng(p.lat, p.lon)).toList();
     try {
       await m.addLine(LineOptions(
@@ -493,6 +592,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_pos != null) _onPosition(_pos!);
     _followCamera();
     _startTrafficTimer();
+    _drawRoute(); // hide the other route options
     // No speed limits yet for this route: fetch them shortly.
     if (s.settings.hasTraffic && !identical(_limitsFor, r)) {
       Future.delayed(const Duration(seconds: 5), _drivingTraffic);
@@ -500,6 +600,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _cancel() {
+    _options = [];
+    _optTraffic.clear();
+    _tomtomOptions.clear();
     _retracing = false;
     _retracePath = const [];
     _trafficTimer?.cancel();
@@ -776,7 +879,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
                 compassEnabled: false,
                 attributionButtonPosition: AttributionButtonPosition.bottomLeft,
-                onMapCreated: (c) => _map = c,
+                onMapCreated: (c) {
+                  _map = c;
+                  c.onLineTapped.add(_onLineTapped);
+                },
                 onStyleLoadedCallback: _onStyleLoaded,
                 onMapLongClick: (Point<double> point, LatLng latLng) {
                   if (_mode == Mode.driving) return;
@@ -1066,6 +1172,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final r = s.trail.routeFromPath(path);
     final end = path.last;
     setState(() {
+      _options = [];
       _retracing = true;
       _retracePath = path;
       _dest = Place('Back along your trail', '', end.lat, end.lon);
@@ -1136,6 +1243,72 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _toast('Saved "$name".');
   }
 
+  /// Route choices side by side: time (with traffic), distance, main roads.
+  Widget _optionCards(ColorScheme cs) {
+    double timeOf(RouteResult o) => _optTraffic[o]?.timeS ?? o.totalS;
+    final fastest = _options.reduce((a, b) => timeOf(a) <= timeOf(b) ? a : b);
+    final shortest = _options.reduce((a, b) => a.totalM <= b.totalM ? a : b);
+    return SizedBox(
+      height: 112,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          for (final o in _options)
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => _selectOption(o),
+                child: Container(
+                  width: 156,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: identical(o, _route) ? cs.primaryContainer : cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: identical(o, _route) ? cs.primary : Colors.transparent, width: 2.5),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Text(formatDuration(timeOf(o)),
+                          style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: (_optTraffic[o]?.delayS ?? 0) >= 300 ? const Color(0xFFD32F2F) : cs.primary)),
+                      if (o.passesZones) ...[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.warning_amber, color: Color(0xFFE53935), size: 20),
+                      ],
+                    ]),
+                    Text(formatDistance(o.totalM), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    if (o.via.isNotEmpty)
+                      Text('via ${o.via}', maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
+                    const Spacer(),
+                    Text(
+                      o.passesZones
+                          ? 'Through a zone'
+                          : _tomtomOptions.contains(o)
+                              ? 'Faster with traffic'
+                              : identical(o, fastest)
+                                  ? 'Fastest'
+                                  : identical(o, shortest)
+                                      ? 'Shortest'
+                                      : 'Alternative',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: o.passesZones ? const Color(0xFFE53935) : cs.onSurfaceVariant),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _zoneWarning(RouteResult r) {
     final lines = <String>[
       ...r.notes,
@@ -1196,8 +1369,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Center(child: CircularProgressIndicator()),
           )
         else if (r != null) ...[
-          Text('${formatDuration(_traffic?.timeS ?? r.totalS)} · ${formatDistance(r.totalM)}',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: cs.primary)),
+          if (_options.length > 1)
+            _optionCards(cs)
+          else
+            Text('${formatDuration(_traffic?.timeS ?? r.totalS)} · ${formatDistance(r.totalM)}',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: cs.primary)),
           if (r.plannedOffline)
             Row(children: [
               Icon(Icons.offline_bolt, size: 18, color: cs.primary),
@@ -1224,15 +1400,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               '${_incidents.length} incident(s) on this route: '
               '${_incidents.map((i) => i.label).toSet().join(', ')}',
               style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w600),
-            ),
-          if (_traffic?.faster != null && _traffic!.savingS >= 60)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: FilledButton.tonalIcon(
-                onPressed: () => _useFaster(driving: false),
-                icon: const Icon(Icons.bolt),
-                label: Text('Faster route: saves ${formatDuration(_traffic!.savingS)}'),
-              ),
             ),
         ],
         if (r != null && !_loadingRoute && (r.passesZones || r.notes.isNotEmpty))

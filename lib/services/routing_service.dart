@@ -46,6 +46,19 @@ class RouteResult {
 
   bool get passesZones => hits.isNotEmpty;
 
+  /// Main road(s) this route uses, e.g. "N1 · R59" (by distance driven on them).
+  String get via {
+    final byLen = <String, double>{};
+    for (final m in maneuvers) {
+      if (m.streets.isEmpty || m.lengthM <= 0) continue;
+      // Prefer route numbers like N1 / R59 / M1 when the road has one.
+      final ref = m.streets.firstWhere((s) => RegExp(r'^[NRM]\d+').hasMatch(s), orElse: () => m.streets.first);
+      byLen[ref] = (byLen[ref] ?? 0) + m.lengthM;
+    }
+    final top = byLen.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return top.take(2).map((e) => e.key).join(' · ');
+  }
+
   /// True if this route was planned on the phone (no internet needed).
   bool plannedOffline = false;
 
@@ -157,6 +170,24 @@ class RoutingService {
   /// Returns null if the result doesn't match the path well enough.
   Future<RouteResult?> routeAlong(List<GeoPoint> path, {double? headingDeg}) async {
     if (path.length < 2) return null;
+    final total = cumulativeDistances(path).last;
+    try {
+      final body = alongBody(path, headingDeg: headingDeg);
+      final r = _parse(await _post(body));
+      r.request = body;
+      // Must be close to the path we asked for (within 15% length).
+      if ((r.totalM - total).abs() > total * 0.15 + 300) return null;
+      final zones = settings.activeZones();
+      r.hits = findZoneHits(r.points, zones);
+      if (r.hits.isNotEmpty) return null;
+      return r;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A request that makes the router follow [path] (through-points along it).
+  Map<String, dynamic> alongBody(List<GeoPoint> path, {double? headingDeg}) {
     final cum = cumulativeDistances(path);
     final total = cum.last;
     final locations = <Map<String, dynamic>>[];
@@ -185,19 +216,68 @@ class RoutingService {
       });
     }
     locations.add({'lat': path.last.lat, 'lon': path.last.lon});
-    try {
-      final body = _body(path.first, path.last, headingDeg, locations: locations);
-      final r = _parse(await _post(body));
-      r.request = body;
-      // Must be close to the path we asked for (within 15% length).
-      if ((r.totalM - total).abs() > total * 0.15 + 300) return null;
-      final zones = settings.activeZones();
-      r.hits = findZoneHits(r.points, zones);
-      if (r.hits.isNotEmpty) return null;
-      return r;
-    } catch (_) {
-      return null;
+    return _body(path.first, path.last, headingDeg, locations: locations);
+  }
+
+  /// Up to 3 different routes to choose from, safest first then quickest.
+  Future<List<RouteResult>> routeOptions(GeoPoint from, GeoPoint to, {double? headingDeg}) async {
+    final zones = settings.activeZones();
+    final notes = <String>[];
+    final excludable = <ActiveZone>[];
+    for (final z in zones) {
+      if (z.contains(from)) {
+        notes.add('You are starting inside "${z.zone.name}".');
+      } else if (z.contains(to)) {
+        notes.add('Your destination is inside "${z.zone.name}".');
+      } else {
+        excludable.add(z);
+      }
     }
+
+    List<RouteResult> parseAll(Map<String, dynamic> j, Map<String, dynamic> body) {
+      final main = _parse(j)..request = (Map.of(body)..remove('alternates'));
+      final out = [main];
+      for (final alt in (j['alternates'] as List?) ?? const []) {
+        try {
+          final r = _parse(alt as Map<String, dynamic>);
+          r.request = alongBody(r.points, headingDeg: headingDeg); // for its lane guidance
+          out.add(r);
+        } catch (_) {}
+      }
+      return out;
+    }
+
+    var options = <RouteResult>[];
+    if (excludable.isNotEmpty) {
+      try {
+        final body = _body(from, to, headingDeg, exclude: excludable, alternates: 2);
+        options = parseAll(await _post(body), body);
+      } on RoutingException catch (e) {
+        if (e.offline) rethrow;
+      }
+    }
+    if (options.isEmpty) {
+      final body = _body(from, to, headingDeg, alternates: 2);
+      options = parseAll(await _post(body), body);
+    }
+    for (final o in options) {
+      o.hits = findZoneHits(o.points, zones);
+      o.notes = notes;
+      o.plannedOffline = _lastOffline;
+    }
+    // Drop near-identical options (same length within 2% and same main roads).
+    final unique = <RouteResult>[];
+    for (final o in options) {
+      if (unique.any((u) => (u.totalM - o.totalM).abs() < o.totalM * 0.02 && u.via == o.via)) continue;
+      unique.add(o);
+    }
+    unique.sort((a, b) {
+      final za = a.hits.fold<double>(0, (s, h) => s + h.metres);
+      final zb = b.hits.fold<double>(0, (s, h) => s + h.metres);
+      if ((za > 0) != (zb > 0)) return za > 0 ? 1 : -1; // safe routes first
+      return a.totalS.compareTo(b.totalS);
+    });
+    return unique.take(3).toList();
   }
 
   /// Lane guidance for [r] from OpenStreetMap lane data (asks the router
