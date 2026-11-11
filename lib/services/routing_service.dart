@@ -330,7 +330,8 @@ class RoutingService {
       {List<ActiveZone> exclude = const [],
       int alternates = 0,
       List<Map<String, dynamic>>? locations,
-      List<GeoPoint> vias = const []}) {
+      List<GeoPoint> vias = const [],
+      String viaRoads = 'secondary'}) {
     final start = <String, dynamic>{'lat': from.lat, 'lon': from.lon};
     if (headingDeg != null) {
       start['heading'] = headingDeg.round();
@@ -341,7 +342,16 @@ class RoutingService {
           [
             start,
             // Towns you chose to drive through, in order (no stop there).
-            for (final v in vias) {'lat': v.lat, 'lon': v.lon, 'type': 'through', 'radius': 150},
+            // "Pass by": any main road within 2.5 km of the town counts, so
+            // the route uses the bypass / main road and never goes into town.
+            for (final v in vias)
+              {
+                'lat': v.lat,
+                'lon': v.lon,
+                'type': 'through',
+                'radius': 2500,
+                if (viaRoads.isNotEmpty) 'search_filter': {'min_road_class': viaRoads},
+              },
             {'lat': to.lat, 'lon': to.lon},
           ],
       'costing': 'auto',
@@ -366,9 +376,41 @@ class RoutingService {
     return body;
   }
 
+  /// Like [_post], but if a "pass by" town has no main road nearby, retries
+  /// allowing smaller roads (tertiary), then any road.
+  Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
+    final locs = (body['locations'] as List).cast<Map<String, dynamic>>();
+    final hasFilter = locs.any((l) => l.containsKey('search_filter'));
+    if (!hasFilter) return _postOnce(body);
+    try {
+      return await _postOnce(body);
+    } on RoutingException catch (e) {
+      if (e.offline) rethrow;
+    }
+    Map<String, dynamic> relaxed(String? cls) => {
+          ...body,
+          'locations': [
+            for (final l in locs)
+              if (l.containsKey('search_filter'))
+                {
+                  ...Map.of(l)..remove('search_filter'),
+                  if (cls != null) 'search_filter': {'min_road_class': cls},
+                }
+              else
+                l
+          ],
+        };
+    try {
+      return await _postOnce(relaxed('tertiary'));
+    } on RoutingException catch (e) {
+      if (e.offline) rethrow;
+    }
+    return _postOnce(relaxed(null));
+  }
+
   /// Plans on the phone when the offline routing data covers every stop,
   /// otherwise (or if that fails) asks the online server.
-  Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _postOnce(Map<String, dynamic> body) async {
     final packs = this.packs;
     final stops = (body['locations'] as List)
         .map((l) => GeoPoint(((l as Map)['lat'] as num).toDouble(), (l['lon'] as num).toDouble()))

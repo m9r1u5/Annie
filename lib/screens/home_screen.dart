@@ -353,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final place = await Navigator.push<Place>(
       context,
       MaterialPageRoute(
-          builder: (_) => SearchScreen(near: _here, title: 'Drive through which town or place?')),
+          builder: (_) => SearchScreen(near: _here, title: 'Pass which town on the way?')),
     );
     if (place == null || !mounted) return;
     setState(() => _vias = [..._vias, place]);
@@ -376,11 +376,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_dest != null) _routeTo(_dest!, keepVias: true);
   }
 
-  /// Once you've driven through a via town, it no longer counts for re-routing.
+  // Where along the current route each via town is passed (route-start metres).
+  RouteResult? _viaAlongFor;
+  final Map<Place, double> _viaAlong = {};
+
+  /// Once you've driven past a via town, it no longer counts for re-routing.
   void _dropPassedVias(GeoPoint here) {
-    if (_vias.isEmpty) return;
+    final r = _nav.route;
+    if (_vias.isEmpty || r == null || _nav.offRoute || r.points.length < 2) return;
+    if (!identical(_viaAlongFor, r)) {
+      _viaAlong.clear();
+      _viaAlongFor = r;
+    }
     final first = _vias.first;
-    if (distanceM(here, first.point) < 700) {
+    final along = _viaAlong.putIfAbsent(first, () {
+      final sn = snapToLine(r.points, first.point);
+      return r.cum[sn.segment] + (r.cum[sn.segment + 1] - r.cum[sn.segment]) * sn.fraction;
+    });
+    if (_nav.progressM > along + 50 || distanceM(here, first.point) < 500) {
       setState(() => _vias = _vias.sublist(1));
       _toast('Passed ${first.name}.');
     }
@@ -409,7 +422,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ActionChip(
             avatar: const Icon(Icons.add_road, size: 18),
-            label: Text(_vias.isEmpty ? 'Add via (drive through a town)' : 'Add another'),
+            label: Text(_vias.isEmpty ? 'Add via (pass a town on the way)' : 'Add another'),
             onPressed: _addVia,
           ),
         ],
