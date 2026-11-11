@@ -24,7 +24,8 @@ class Services {
         voice = VoiceService(settings),
         updates = UpdateService() {
     styles = StyleBuilder(packs);
-    places = PlacesService(settings, packs.installedSearchDbs);
+    places = PlacesService(settings, packs.installedSearchDbs,
+        onlineSearch: (q, near) => search.online(q, near: near));
   }
 
   static late Services i;

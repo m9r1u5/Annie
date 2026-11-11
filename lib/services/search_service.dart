@@ -30,6 +30,24 @@ class OfflineSearchCache {
   }
 }
 
+/// Ways to match typed words in the offline data, strictest first:
+/// whole words ("mediclinic* vereeniging*"), then the first 4 letters of
+/// each word ("medi* vere*") so spelling differences and hyphens still match
+/// (e.g. "Vereening Medi-Clinic").
+List<String> offlineMatches(String query) {
+  final words = query
+      .toLowerCase()
+      .replaceAll(RegExp(r"[^\p{L}\p{N}\s]", unicode: true), ' ')
+      .split(RegExp(r'\s+'))
+      .where((w) => w.isNotEmpty)
+      .toList();
+  if (words.isEmpty) return const [];
+  final out = <String>[words.map((w) => '$w*').join(' ')];
+  final short = words.map((w) => w.length > 4 ? '${w.substring(0, 4)}*' : '$w*').join(' ');
+  if (!out.contains(short)) out.add(short);
+  return out;
+}
+
 /// Address and place search: online (Photon) when there is signal,
 /// otherwise the offline databases downloaded with your provinces.
 class SearchService {
@@ -106,10 +124,11 @@ class SearchService {
         .where((w) => w.isNotEmpty)
         .toList();
     if (words.isEmpty) return [];
-    final match = words.map((w) => '$w*').join(' ');
     final q = query.trim().toLowerCase();
     final scored = <(double, Place)>[];
     final seen = <String>{};
+    for (final match in offlineMatches(query)) {
+    if (scored.isNotEmpty) break; // stricter match already found something
     for (final path in dbs) {
       try {
         final db = await OfflineSearchCache.open(path);
@@ -134,9 +153,13 @@ class SearchService {
         }
       } catch (_) {}
     }
+    }
     scored.sort((a, b) => a.$1.compareTo(b.$1));
     return scored.take(15).map((e) => e.$2).toList();
   }
+
+  /// Online OpenStreetMap search (Photon), no key needed.
+  Future<List<Place>> online(String query, {GeoPoint? near}) => _online(query, near: near);
 
   Future<List<Place>> _online(String query, {GeoPoint? near}) async {
     final q = query.trim();

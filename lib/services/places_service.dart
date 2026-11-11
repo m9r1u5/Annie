@@ -63,9 +63,12 @@ class FoundPlace {
 
 /// Finds places near you or along your route: TomTom online, offline data as backup.
 class PlacesService {
-  PlacesService(this.settings, this.offlineDbs);
+  PlacesService(this.settings, this.offlineDbs, {this.onlineSearch});
   final Settings settings;
   final Future<List<String>> Function() offlineDbs;
+
+  /// Free online map search used when there is no TomTom key.
+  final Future<List<Place>> Function(String query, GeoPoint near)? onlineSearch;
 
   /// True if the last results came from the offline data.
   bool lastWasOffline = false;
@@ -145,26 +148,43 @@ class PlacesService {
         }
       } catch (_) {}
     }
-    // Offline: match names in your downloaded search data, nearest first.
-    lastWasOffline = true;
-    final words = q
-        .toLowerCase()
-        .replaceAll(RegExp(r"[^\p{L}\p{N}\s]", unicode: true), ' ')
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty);
-    final match = words.map((w) => '$w*').join(' ');
-    if (match.isEmpty) return const [];
-    final out = <FoundPlace>[];
-    for (final path in await offlineDbs()) {
+    // No TomTom key (or no answer): free online map search.
+    final online = onlineSearch;
+    if (online != null) {
       try {
-        final db = await OfflineSearchCache.open(path);
-        final rows = await db.rawQuery(
-            "SELECT name, context, kind, lat, lon FROM s WHERE s MATCH ? AND kind NOT IN ('street','address') LIMIT 400",
-            [match]);
-        out.addAll(rows.map((r) => _fromRow(r, here)));
+        final found = await online(q, here);
+        if (found.isNotEmpty) {
+          lastWasOffline = false;
+          final out = found
+              .map((p) => FoundPlace(
+                    name: p.name,
+                    address: p.address,
+                    point: p.point,
+                    distanceM: distanceM(here, p.point),
+                  ))
+              .where((p) => p.distanceM! <= 80000)
+              .toList()
+            ..sort((a, b) => a.distanceM!.compareTo(b.distanceM!));
+          if (out.isNotEmpty) return out;
+        }
       } catch (_) {}
     }
-    out.removeWhere((p) => (p.distanceM ?? 0) > 60000);
+    // Offline: match names in your downloaded search data, nearest first.
+    lastWasOffline = true;
+    final out = <FoundPlace>[];
+    for (final match in offlineMatches(q)) {
+      for (final path in await offlineDbs()) {
+        try {
+          final db = await OfflineSearchCache.open(path);
+          final rows = await db.rawQuery(
+              "SELECT name, context, kind, lat, lon FROM s WHERE s MATCH ? AND kind NOT IN ('street','address') LIMIT 400",
+              [match]);
+          out.addAll(rows.map((r) => _fromRow(r, here)));
+        } catch (_) {}
+      }
+      out.removeWhere((p) => (p.distanceM ?? 0) > 60000);
+      if (out.isNotEmpty) break; // stricter match found something
+    }
     out.sort((a, b) => a.distanceM!.compareTo(b.distanceM!));
     return out.take(30).toList();
   }
