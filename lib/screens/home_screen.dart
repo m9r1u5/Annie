@@ -10,7 +10,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../main.dart';
-import '../services/car_bridge.dart';
 import '../services/nav_engine.dart';
 import '../services/routing_service.dart';
 import '../services/settings.dart';
@@ -91,11 +90,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _nav.addListener(_onNav);
-    // Android Auto: "End" on the car screen ends the trip here too.
-    CarBridge.init();
-    CarBridge.onAction = (a) {
-      if (a == 'end' && _mode == Mode.driving && mounted) _cancel();
-    };
     s.settings.addListener(_onSettings);
     _styleNight = s.settings.isNight;
     _buildStyle();
@@ -139,7 +133,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _styleBuilt3d = want3d;
     final changed = _style?.styleString != built.styleString;
     setState(() => _style = built);
-    _sendCar(force: true);
     if (changed && _map != null) {
       try {
         await _map!.setStyle(built.styleString);
@@ -269,7 +262,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onPosition(Position p, {bool initial = false}) {
     _pos = p;
-    if (_mode != Mode.driving) _sendCar(); // free-drive map on the car screen
     if (s.settings.recordTrail) s.trail.add(p.latitude, p.longitude, p.speed, p.accuracy);
     if (initial && _mode == Mode.browse) {
       _map?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 14));
@@ -808,7 +800,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _cancel() {
     _vias = [];
     _mode = Mode.browse;
-    Future.microtask(() => _sendCar(force: true)); // car screen: trip over
     _restartGps(); // trip over: stop the background service
     _options = [];
     _optTraffic.clear();
@@ -982,51 +973,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return '${which.label} ahead · ${formatDistance(best!)}';
   }
 
-  // ---------------- Android Auto ----------------
-
-  DateTime _lastCar = DateTime.fromMillisecondsSinceEpoch(0);
-  RouteResult? _carRoute;
-  String? _carStyle;
-
-  /// Sends the current trip to the car screen (at most about once a second).
-  void _sendCar({bool force = false}) {
-    final now = DateTime.now();
-    if (!force && now.difference(_lastCar).inMilliseconds < 900) return;
-    _lastCar = now;
-    final driving = _mode == Mode.driving && _nav.route != null;
-    final r = driving ? _nav.route : null;
-    final m = driving ? _nav.nextManeuver : null;
-    final pos = (driving && !_nav.offRoute ? _nav.snapped : null) ?? _here;
-    final action = m == null ? '' : s.voice.action(m);
-    final data = <String, dynamic>{
-      'navigating': driving,
-      'type': m?.type ?? 0,
-      'exit': m?.roundaboutExit ?? 0,
-      'next': _nav.distToNextM,
-      'cue': action.isEmpty ? '' : action[0].toUpperCase() + action.substring(1),
-      'street': m?.street ?? '',
-      'remainingM': _nav.remainingM,
-      'remainingS': _nav.remainingS,
-      'offRoute': driving && _nav.offRoute,
-      'heading': _nav.heading ?? ((_pos?.heading ?? -1) >= 0 ? _pos!.heading : 0),
-      if (pos != null) 'lat': pos.lat,
-      if (pos != null) 'lon': pos.lon,
-    };
-    if (force || !identical(_carRoute, r)) {
-      _carRoute = r;
-      data['route'] = r == null ? const [] : r.points.map((p) => [p.lon, p.lat]).toList();
-    }
-    final style = _style?.styleString;
-    if (style != null && (force || style != _carStyle)) {
-      _carStyle = style;
-      data['style'] = style;
-    }
-    CarBridge.send(data);
-  }
-
   void _onNav() {
     if (!mounted) return;
-    _sendCar();
     setState(() {});
     if (_nav.arrived && !_arrivedShown) {
       _arrivedShown = true;
