@@ -23,6 +23,24 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Android Auto: the phone app sends its navigation state to the car screen,
+        // and the car screen can ask the phone to end the trip.
+        val car = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saferoute/car")
+        car.setMethodCallHandler { call, result ->
+            if (call.method == "update") {
+                val json = call.arguments as? String
+                if (json != null) {
+                    try {
+                        CarState.update(json)
+                    } catch (_: Throwable) {
+                    }
+                }
+                result.success(true)
+            } else {
+                result.notImplemented()
+            }
+        }
+        CarState.toPhone = { action -> main.post { car.invokeMethod("carAction", action) } }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saferoute/valhalla")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
