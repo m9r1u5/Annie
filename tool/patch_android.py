@@ -70,6 +70,15 @@ car = '''
             android:name="androidx.car.app.minCarApiLevel"
             android:value="1"/>
 '''
+car += '''
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="za.saferoute.saferoute_sa.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"/>
+'''
 if "SafeRouteCarAppService" not in xml:
     xml = xml.replace("</application>", car + "    </application>", 1)
 
@@ -113,6 +122,9 @@ dependencies {{
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
     // Android Auto (car screen)
     implementation("androidx.car.app:app:1.4.0")
+    // Shizuku: install SafeRoute "from the Play Store" so Android Auto lists it
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
     // The map engine the Flutter map plugin already ships (compile against it only).
     compileOnly("org.maplibre.gl:android-sdk-opengl:13.7.1")
 }}

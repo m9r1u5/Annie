@@ -9,6 +9,10 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.util.concurrent.Executors
 import org.json.JSONObject
+import android.content.pm.PackageManager
+import rikka.shizuku.Shizuku
+import java.io.FileInputStream
+import java.io.InputStream
 
 /**
  * Runs the Valhalla route engine on the phone (offline routing).
@@ -41,6 +45,41 @@ class MainActivity : FlutterActivity() {
             }
         }
         CarState.toPhone = { action -> main.post { car.invokeMethod("carAction", action) } }
+
+        // Shizuku: (re)install SafeRoute with the Play Store as installer, so
+        // Android Auto lists it (it hides apps installed from a browser).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saferoute/shizuku")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "status" -> result.success(shizukuStatus())
+                    "request" -> {
+                        try {
+                            if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                                Shizuku.requestPermission(4242)
+                            }
+                            result.success(true)
+                        } catch (e: Throwable) {
+                            result.error("SHIZUKU", e.message, null)
+                        }
+                    }
+                    "installSelf" -> worker.execute {
+                        val out = installViaShizuku(FileInputStream(applicationInfo.sourceDir))
+                        main.post { result.success(out) }
+                    }
+                    "installFile" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("ARGS", "path required", null)
+                        } else {
+                            worker.execute {
+                                val out = installViaShizuku(FileInputStream(path))
+                                main.post { result.success(out) }
+                            }
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saferoute/valhalla")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -73,6 +112,65 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun shizukuStatus(): Map<String, Any> {
+        val installed = try {
+            packageManager.getPackageInfo("moe.shizuku.privileged.api", 0)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+        val running = try {
+            Shizuku.pingBinder()
+        } catch (_: Throwable) {
+            false
+        }
+        val granted = running && try {
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) {
+            false
+        }
+        val installer = try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                packageManager.getInstallSourceInfo(packageName).installingPackageName ?: ""
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getInstallerPackageName(packageName) ?: ""
+            }
+        } catch (_: Throwable) {
+            ""
+        }
+        return mapOf("installed" to installed, "running" to running, "granted" to granted, "installer" to installer)
+    }
+
+    /** Runs a shell command through Shizuku (as the ADB shell user). */
+    private fun shizukuShell(cmd: String, input: InputStream?): Pair<Int, String> {
+        val m = Shizuku::class.java.getDeclaredMethod(
+            "newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java
+        )
+        m.isAccessible = true
+        val p = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
+        if (input != null) {
+            p.outputStream.use { o -> input.use { it.copyTo(o) } }
+        } else {
+            p.outputStream.close()
+        }
+        val out = p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()
+        return p.waitFor() to out.trim()
+    }
+
+    /** Copies the APK to the phone's temp folder and installs it as if from the Play Store. */
+    private fun installViaShizuku(apk: InputStream): String {
+        return try {
+            val tmp = "/data/local/tmp/saferoute_install.apk"
+            val (c1, o1) = shizukuShell("cat > $tmp", apk)
+            if (c1 != 0) return "Copy failed: $o1"
+            val (c2, o2) = shizukuShell("pm install -r -i com.android.vending $tmp; rm -f $tmp", null)
+            if (c2 != 0 || !o2.contains("Success")) "Install failed: $o2" else "OK"
+        } catch (e: Throwable) {
+            "Error: ${e.message ?: e}"
+        }
     }
 
     private fun engine(tilesDir: String): Valhalla {

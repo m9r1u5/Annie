@@ -3,6 +3,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
+import '../services/android_auto.dart';
 import '../main.dart';
 import '../services/settings.dart';
 import 'maps_screen.dart';
@@ -19,9 +20,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _version = '';
   bool _checking = false;
 
+  ShizukuStatus? _auto;
+
+  Future<void> _refreshAuto() async {
+    final st = await AndroidAutoHelper.status();
+    if (mounted) setState(() => _auto = st);
+  }
+
+  /// Steps to make SafeRoute show up in Android Auto.
+  Future<void> _fixAndroidAuto() async {
+    var st = await AndroidAutoHelper.status();
+    if (!mounted) return;
+    if (!st.installed || !st.running) {
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          scrollable: true,
+          title: Text(st.installed ? 'Start Shizuku' : 'Install Shizuku first'),
+          content: Text(st.installed
+              ? 'Open Shizuku and start it with Wireless debugging (it shows you how), then come back and tap this again.'
+              : 'Android Auto only lists apps it thinks came from the Play Store. The free app Shizuku lets '
+                  'SafeRoute reinstall itself that way, without a computer.\n\n'
+                  '1. Install Shizuku from the Play Store.\n'
+                  '2. Open it and start it with Wireless debugging (follow its steps).\n'
+                  '3. Come back here and tap "Show in Android Auto" again.'),
+          actions: [
+            if (!st.installed)
+              TextButton(
+                onPressed: () => launchUrl(
+                    Uri.parse('https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api'),
+                    mode: LaunchMode.externalApplication),
+                child: const Text('Open Play Store'),
+              ),
+            FilledButton(onPressed: () => Navigator.pop(c), child: const Text('OK')),
+          ],
+        ),
+      );
+      _refreshAuto();
+      return;
+    }
+    if (!st.granted) {
+      await AndroidAutoHelper.requestPermission();
+      _toast('Tap "Allow all the time" in the Shizuku prompt, then tap "Show in Android Auto" again.');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        scrollable: true,
+        title: const Text('Show in Android Auto'),
+        content: const Text('SafeRoute will reinstall itself (your maps and settings stay). '
+            'The app closes when it is done: open it again, then restart Android Auto and check '
+            'Customise launcher.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Reinstall')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    _toast('Reinstalling…');
+    final out = await AndroidAutoHelper.reinstallSelf();
+    if (out != 'OK') _toast(out);
+    st = await AndroidAutoHelper.status();
+    if (mounted) setState(() => _auto = st);
+  }
+
   @override
   void initState() {
     super.initState();
+    _refreshAuto();
     s.updates.currentVersion().then((v) {
       if (mounted) setState(() => _version = v);
     });
@@ -43,7 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (c) => AlertDialog(
           title: Text('Update to ${u.version}?'),
           content: const Text(
-              'The new APK will download in your browser. Open it when it finishes and tap Install.'),
+              'SafeRoute downloads and installs the update (through Shizuku if it is running, otherwise in your browser: open the file and tap Install).'),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Later')),
             FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Download')),
@@ -51,7 +119,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
       if (ok == true) {
-        await launchUrl(Uri.parse(u.apkUrl), mode: LaunchMode.externalApplication);
+        final st = await AndroidAutoHelper.status();
+        if (st.ready) {
+          // Install through Shizuku so SafeRoute stays visible in Android Auto.
+          _toast('Downloading update…');
+          final out = await AndroidAutoHelper.downloadAndInstall(u.apkUrl, (_) {});
+          if (out != 'OK') _toast(out);
+        } else {
+          await launchUrl(Uri.parse(u.apkUrl), mode: LaunchMode.externalApplication);
+        }
       }
     } catch (e) {
       _toast(e.toString().replaceFirst('Exception: ', ''));
@@ -291,6 +367,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           title: const Text('Download updates on Wi-Fi only'),
           value: st.wifiOnly,
           onChanged: (v) => _set((x) => x.wifiOnly = v),
+        ),
+        _header('Android Auto'),
+        ListTile(
+          leading: Icon(Icons.directions_car,
+              color: _auto?.visibleInAndroidAuto == true ? const Color(0xFF2E7D32) : null),
+          title: const Text('Show in Android Auto'),
+          subtitle: Text(_auto == null
+              ? 'Checking…'
+              : _auto!.visibleInAndroidAuto
+                  ? 'Ready: SafeRoute can appear in Android Auto. (Also turn on Unknown sources in Android Auto developer settings.)'
+                  : 'Not visible yet: Android Auto hides apps not installed from the Play Store. Tap to fix (uses the free Shizuku app).'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _fixAndroidAuto,
         ),
         _header('App'),
         ListTile(
