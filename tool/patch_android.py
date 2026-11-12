@@ -129,6 +129,15 @@ dependencies {{
     compileOnly("org.maplibre.gl:android-sdk-opengl:13.7.1")
 }}
 '''
+# Keep code that is reached by reflection or by Android Auto.
+if "saferoute-rules.pro" not in g:
+    g = re.sub(r"(defaultConfig\s*\{)", r'\1\n        proguardFiles("saferoute-rules.pro")', g, count=1)
+pathlib.Path("android/app/saferoute-rules.pro").write_text(
+    "-keep class rikka.shizuku.** { *; }\n"
+    "-keep class moe.shizuku.** { *; }\n"
+    "-keep class androidx.car.app.** { *; }\n"
+    "-keep class za.saferoute.saferoute_sa.** { *; }\n"
+)
 gradle.write_text(g)
 print("app/build.gradle.kts patched")
 
