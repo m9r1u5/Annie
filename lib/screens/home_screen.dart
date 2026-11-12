@@ -359,6 +359,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _route = r;
       _nav.setRoute(r);
       await _drawRoute();
+      // Belt and braces: draw the new route again once things settle.
+      Future.delayed(const Duration(seconds: 2), _drawRoute);
       _drivingTraffic();
       _loadLanes(r);
     } catch (e) {
@@ -624,9 +626,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _drawRoute();
   }
 
+  // Redraws run one at a time; overlapping requests are merged into one more
+  // redraw, and a failed route line is retried (e.g. while the map reloads).
+  bool _drawing = false;
+  bool _drawAgain = false;
+
   Future<void> _drawRoute() async {
+    if (_drawing) {
+      _drawAgain = true;
+      return;
+    }
+    _drawing = true;
+    var tries = 0;
+    try {
+      do {
+        _drawAgain = false;
+        final ok = await _drawRouteOnce();
+        if (!ok && tries++ < 6) {
+          await Future.delayed(const Duration(milliseconds: 700));
+          _drawAgain = true;
+        }
+      } while (_drawAgain && mounted);
+    } finally {
+      _drawing = false;
+    }
+  }
+
+  /// Draws zones, trail, route options and the route. False if the route line
+  /// could not be drawn (the map wasn't ready).
+  Future<bool> _drawRouteOnce() async {
     final m = _map;
-    if (m == null) return;
+    if (m == null) return true;
     try {
       await m.clearLines();
       await m.clearCircles();
@@ -659,7 +689,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     }
     final r = _route;
-    if (r == null || _mode == Mode.browse) return;
+    if (r == null || _mode == Mode.browse) return true;
     _lineToOption.clear();
     if (_mode == Mode.preview && _options.length > 1) {
       for (final o in _options) {
@@ -681,6 +711,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           geometry: geom, lineColor: _retracing ? '#BF360C' : '#0D47A1', lineWidth: 11, lineOpacity: 0.9));
       await m.addLine(LineOptions(
           geometry: geom, lineColor: _retracing ? '#FF7043' : Brand.routeBlue, lineWidth: 7, lineOpacity: 1));
+    } catch (_) {
+      return false; // map not ready: try again shortly
+    }
+    try {
       // Stretches that go through a zone are drawn red.
       for (final h in r.hits) {
         for (final st in h.stretches) {
@@ -720,6 +754,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ));
       }
     } catch (_) {}
+    return true;
   }
 
   void _fitRoute(RouteResult r) {
