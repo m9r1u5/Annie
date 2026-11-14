@@ -116,6 +116,49 @@ class TrailService {
     return _simplify(out, 8);
   }
 
+  /// Two trail points further apart than this means GPS wasn't recording
+  /// in between (app closed, screen off, tunnel). Never draw a straight line.
+  static const gapM = 250.0;
+
+  /// Like [pathBack], but every gap in the recording is filled with real
+  /// roads from [fill] (the router). Returns the path, how many gaps there
+  /// were and how many could not be filled.
+  Future<(List<GeoPoint>, int, int)> pathBackOnRoads(
+      GeoPoint from, int toIndex, Future<List<GeoPoint>?> Function(GeoPoint a, GeoPoint b) fill) async {
+    if (points.isEmpty) return (const <GeoPoint>[], 0, 0);
+    final raw = <GeoPoint>[from];
+    for (var i = points.length - 1; i >= toIndex; i--) {
+      raw.add(points[i].point);
+    }
+    // Split into pieces that were recorded continuously.
+    final runs = <List<GeoPoint>>[
+      [raw.first]
+    ];
+    for (var i = 1; i < raw.length; i++) {
+      if (distanceM(raw[i - 1], raw[i]) > gapM) runs.add(<GeoPoint>[]);
+      runs.last.add(raw[i]);
+    }
+    final out = <GeoPoint>[];
+    var unfilled = 0;
+    for (var k = 0; k < runs.length; k++) {
+      final run = _simplify(runs[k], 8);
+      if (k > 0 && out.isNotEmpty) {
+        final a = out.last, b = run.first;
+        List<GeoPoint>? road;
+        try {
+          road = await fill(a, b);
+        } catch (_) {}
+        if (road != null && road.length >= 2) {
+          out.addAll(road.skip(1));
+        } else {
+          unfilled++;
+        }
+      }
+      out.addAll(run);
+    }
+    return (out, runs.length - 1, unfilled);
+  }
+
   /// Trail of the last [span] for drawing on the map.
   List<GeoPoint> recent(Duration span) {
     final since = DateTime.now().subtract(span);

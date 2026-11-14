@@ -13,6 +13,7 @@ import '../main.dart';
 import '../services/nav_engine.dart';
 import '../services/routing_service.dart';
 import '../services/settings.dart';
+import '../services/trail_service.dart';
 import '../services/style_builder.dart';
 import '../services/traffic_service.dart';
 import '../services/voice_service.dart';
@@ -677,10 +678,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Your trail (last hour) in orange.
     if (s.settings.showTrail && !_retracing) {
       final trail = s.trail.recent(const Duration(hours: 1));
-      if (trail.length >= 2) {
+      // Separate pieces where GPS wasn't recording (no straight lines across gaps).
+      final pieces = <List<GeoPoint>>[];
+      for (var i = 0; i < trail.length; i++) {
+        if (i == 0 || distanceM(trail[i - 1], trail[i]) > TrailService.gapM) pieces.add(<GeoPoint>[]);
+        pieces.last.add(trail[i]);
+      }
+      for (final piece in pieces) {
+        if (piece.length < 2) continue;
         try {
           await m.addLine(LineOptions(
-            geometry: trail.map((p) => LatLng(p.lat, p.lon)).toList(),
+            geometry: piece.map((p) => LatLng(p.lat, p.lon)).toList(),
             lineColor: '#FF7043',
             lineWidth: 4,
             lineOpacity: 0.75,
@@ -1424,12 +1432,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (chosen == null || !mounted) return;
-    final path = trail.pathBack(here, chosen);
+    // Where GPS wasn't recording, follow the real roads instead of a straight line.
+    _toast('Finding the roads you drove…');
+    setState(() => _loadingRoute = true);
+    final (path, gaps, unfilled) = await trail.pathBackOnRoads(here, chosen, (a, b) async {
+      final r = await s.routing.route(a, b);
+      return r.points;
+    });
+    if (!mounted) return;
+    setState(() => _loadingRoute = false);
     if (path.length < 2 || trail.lengthM(path) < 60) {
       _toast('You are already there.');
       return;
     }
     _startRetrace(path);
+    if (unfilled > 0) {
+      _toast('Part of your trail was not recorded and no road could be found for it. Follow the roads, not the straight line.');
+    } else if (gaps > 0 && !s.settings.backgroundTrail) {
+      _toast('Tip: turn on "Record in background" in Settings so the whole trip is recorded with the screen off.');
+    }
   }
 
   void _startRetrace(List<GeoPoint> path) {
